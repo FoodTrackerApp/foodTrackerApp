@@ -1,0 +1,4 @@
++ Add local database
+    - expo-sqlite
++ Add handler to sync local and cloud database
++ Add switch to have local only

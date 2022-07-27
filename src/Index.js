@@ -1,30 +1,52 @@
 import { StatusBar } from 'expo-status-bar';
-import { StyleSheet, Text, View, ScrollView, Modal, Pressable } from 'react-native';
+import { StyleSheet, Text, View, ScrollView, Modal, ToastAndroid } from 'react-native';
 import { DataTable, Searchbar, IconButton, Button, Divider, TextInput } from 'react-native-paper';
-import React from "react";
+import React, { useState } from "react";
 import { useEffect } from 'react';
 import { BarCodeScanner } from 'expo-barcode-scanner';
 import convertUPC from './functions/ConvertUPC';
 import { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
+import * as SQLite from "expo-sqlite";
+import _HOST from "./constants/Host";
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+function useForceUpdate() {
+  const [value, setValue] = useState(0);
+  return [() => setValue(value + 1), value];
+}
 
 export default function App() {
 
   const [isOverdue, setIsOverdue] = React.useState(false);
-  const [timeDiff, setTimeDiff] = React.useState(69);
+  const [timeDiff, setTimeDiff] = React.useState(0);
   const [searchTerm, setSearchTerm] = React.useState("");
   const [data, setData] = React.useState([]);
   const [rows, setRows] = React.useState(data);
   const [loading, setLoading] = React.useState(false);
-  const [nextDue, setNextDue] = React.useState({name: "loading", date: 0, count: "0", group: "..."});
+  const [nextDue, setNextDue] = React.useState({name: "", date: 0, count: "0", group: "..."});
   const [form, setForm] = React.useState({name: "", date: datePickerDate, count: "", group: ""});
+  const [isOffline, setIsOffline] = React.useState(false);
 
   // modal stuff
   const [modalVisible, setModalVisible] = React.useState(false);
   const [addModalVisible, setAddModalVisible] = React.useState(false);
   
   useEffect(() => {
+    // make items database if not existent
+    db.transaction((tx) => {
+      tx.executeSql(
+        "CREATE TABLE IF NOT EXISTS items (id integer primary key not null, name string, date int, count int, group string);"
+      );
+    },
+    (error) => {console.log(error)},
+    () => {console.log("Created items table")}
+    );
+    // fetches data from local and cloud
     fetchData();
   }, [])
+
+  const db = SQLite.openDatabase("db.db");
+  const [forceUpdate, forceUpdateId] = useForceUpdate();
 
   // scanner stuff
   const [hasPermission, setHasPermission] = React.useState(null);
@@ -62,6 +84,100 @@ export default function App() {
     };
 
 
+  const addItem = async () => {
+    // add item from form to localDatabase and try to sync
+    const dateMod = new Date().getTime();
+    console.log("Adding item:", form.name);
+
+    db.transaction((tx) => {
+      tx.executeSql("insert into items (name, date, count, place, dateModified) values (?, ?, ?, ?, ?)", 
+        [form.name, form.date, form.count, form.group, dateMod]);
+    },
+    (err) => {console.log(err)},
+    loadDataFromDevice,
+    )
+    console.log("Trying network");
+    if(!isOffline) {
+      const res = await fetch(`${_HOST}/api/send`, {method: "POST", body: JSON.stringify({...form, dateModified: dateMod})})
+      const json = await res.json();
+      console.log(json);
+    }
+    hideAddModal();
+  }
+
+  useEffect(() => {
+    if(!isOffline) {
+      sync();
+    }
+  }, [isOffline])
+
+  // iterates through data and removes old duplicates
+  const sync = async () => {
+    if(isOffline) { return; }
+
+    try {
+      // ping server to see if network is available
+
+      const res = await fetch(`${_HOST}/api/ping`);
+      const json = await res.json();
+    } catch(e) {
+      setIsOffline(true);
+      // show toast
+      ToastAndroid.show("Could not reach network. Offline mode enabled", ToastAndroid.LONG);
+      return;
+    }
+
+
+    try {
+      const localLastChange = await AsyncStorage.getItem("dateModified");
+
+      // get last change from server
+      const res = await fetch(`${_HOST}/api/lastChange`);
+      const json = await res.json();
+
+      if(localLastChange < json.dateModified) {
+        // get all items from server
+        const res = await fetch(`${_HOST}/api/getAll`);
+        const json = await res.json();
+
+        // delete all items from local database
+        db.transaction((tx) => {
+          tx.executeSql("delete from items");
+        },
+        null,
+        forceUpdate
+        )
+
+        // add all items from server to local database
+        db.transaction((tx) => {
+          json.forEach(item => {
+            tx.executeSql("insert into items (name, date, count, place, dateModified) values (?, ?, ?, ?, ?)", 
+              [item.name, item.date, item.count, item.group, item.dateModified]);
+          }
+          )
+        },
+        null,
+        forceUpdate
+        )
+
+        // set last change to server
+        await AsyncStorage.setItem("dateModified", json.dateModified);
+      } else {
+        
+        const res = await fetch(`${_HOST}/api/replace`, {
+          method: "POST",
+          body: JSON.stringify(data)
+        });
+        const json = res.json();
+        console.log(json);
+      }
+
+    } catch(e) {
+      console.error(e);
+      ToastAndroid.show("Error syncing with server: " + e, ToastAndroid.LONG);
+    }
+  }
+
   const handleBarCodeScanned = ({ type, data }) => {
     setScanned(true);
     if(type == 32) {
@@ -77,7 +193,6 @@ export default function App() {
           setScanned(false);
           resetForm();
         }
-   
       })
     }
   }
@@ -122,6 +237,7 @@ export default function App() {
       setNextDue(nextDueEval);
   }
 
+
   // handle search
   useEffect(() => {
     if(searchTerm.length > 0) {
@@ -130,11 +246,28 @@ export default function App() {
     } else { setRows(data) }
   }, [searchTerm, data, setRows])
 
+  const loadDataFromDevice = () => {
+    console.log("Loading SQL data");
+    db.transaction((tx) => {
+    tx.executeSql(
+        `select * from items`,
+        [],
+        (_,{rows: {_array}}) => setData(_array)
+      )
+    });
+    setRows(data);
+    setSearchTerm("");
+    console.log("new data", data);
+  }
+
   const fetchData = async () => {
     setLoading(true);
-    const response = await fetch("http://192.168.0.100:30010/api/get");
-    const json = await response.json();
-    setData(json);
+
+    // get data from SQL database
+    loadDataFromDevice();
+
+    console.log("Data from sql:", data);
+
     setRows(data);
     CalculateNextDue(data);
     setLoading(false);
@@ -183,7 +316,7 @@ export default function App() {
           <View style={styles.formField}>
             <TextInput label="Place"  />
           </View>
-          <View style={{backgroundColor: "#5bc569", borderColor: "#5bc569", borderRadius: 10, borderWidth: 2, marginTop: 10 }}><Button onPress={hideAddModal} color="white" icon="plus-box">Add</Button></View>
+          <View style={{backgroundColor: "#5bc569", borderColor: "#5bc569", borderRadius: 10, borderWidth: 2, marginTop: 10 }}><Button onPress={addItem} color="white" icon="plus-box">Add</Button></View>
           <View style={{backgroundColor: "transparent", borderColor: "#f5a524", borderRadius: 10, borderWidth: 2, marginTop: 10 }}><Button onPress={hideAddModal} color="#f5a524" icon="close">Close</Button></View>
       </View>
 
@@ -200,7 +333,8 @@ export default function App() {
       <View style={{ padding: 10 }}><Button style={{marginTop: 10}} onPress={hideModal}>Close</Button></View>
     </Modal>
 
-    <Text style={styles.header}>FoodTracker</Text>
+    <Text style={styles.header}>FoodTracker </Text>
+    {isOffline ? <Text style={{color: "#76e790"}}>offline</Text> : null}
     
     <View style={{
       backgroundColor: '#161616',
