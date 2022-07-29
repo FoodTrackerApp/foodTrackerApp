@@ -480,7 +480,6 @@ export default function Home({ settings, setSettings }) {
             value={form.place}
              />
           </View>
-          {isEditMode ? <Text style={{color: "white"}}>ID: {form.id}</Text> : null}
           <View style={{backgroundColor: "#5bc569", borderColor: "#5bc569", borderRadius: 10, borderWidth: 2, marginTop: 10 }}><Button onPress={addItem} color="white" icon="plus-box">{isEditMode ? "Save" : "Add"}</Button></View>
           {isEditMode ? <View style={{backgroundColor: "#f31260", borderColor: "#f31260", borderRadius: 10, borderWidth: 2, marginTop: 10 }}><Button onPress={deleteItem} color="white" icon="plus-box">Delete</Button></View> : null}
           <View style={{backgroundColor: "transparent", borderColor: "#f5a524", borderRadius: 10, borderWidth: 2, marginTop: 10 }}><Button onPress={hideAddModal} color="#f5a524" icon="close">Close</Button></View>
