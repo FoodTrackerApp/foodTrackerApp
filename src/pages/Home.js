@@ -4,38 +4,52 @@ import { DataTable, Searchbar, IconButton, Button, Divider, TextInput } from 're
 import React, { useState } from "react";
 import { useEffect } from 'react';
 import { BarCodeScanner } from 'expo-barcode-scanner';
-import convertUPC from './functions/ConvertUPC';
+import convertUPC from '../functions/ConvertUPC';
 import { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
 import * as SQLite from "expo-sqlite";
-import _HOST from "./constants/Host";
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Crypto from "expo-crypto";
 
 function useForceUpdate() {
   const [value, setValue] = useState(0);
   return [() => setValue(value + 1), value];
 }
 
-export default function App() {
+// returns normalized timestrings -> 0h 0min 0sec
+function cleanTimeString(str) {
+  var date = new Date(str);
 
-  const [isOverdue, setIsOverdue] = React.useState(false);
-  const [timeDiff, setTimeDiff] = React.useState(0);
+  let hours = date.getHours() * 3600000;
+  let minutes = date.getMinutes() * 60000;
+  let seconds = date.getSeconds() * 1000;
+
+  str = str - (hours+minutes+seconds) + 1000;
+  return str;
+}
+
+
+export default function Home({ settings }) {
+
   const [searchTerm, setSearchTerm] = React.useState("");
   const [data, setData] = React.useState([]);
   const [rows, setRows] = React.useState(data);
-  const [loading, setLoading] = React.useState(false);
-  const [nextDue, setNextDue] = React.useState({name: "", date: 0, count: "0", group: "..."});
-  const [form, setForm] = React.useState({name: "", date: datePickerDate, count: "", group: ""});
+  const [nextDue, setNextDue] = React.useState({name: "", date: 0, count: 0, place: "", id: ""});
+  const [form, setForm] = React.useState({name: "", date: datePickerDate, count: "", place: "", id: ""});
   const [isOffline, setIsOffline] = React.useState(false);
+  const [isEditMode, setIsEditMode] = React.useState(false);
+  const [lastMod, setLastMod] = React.useState(0);
 
   // modal stuff
   const [modalVisible, setModalVisible] = React.useState(false);
   const [addModalVisible, setAddModalVisible] = React.useState(false);
-  
+
+  const db = SQLite.openDatabase("item.db");
+
   useEffect(() => {
     // make items database if not existent
     db.transaction((tx) => {
       tx.executeSql(
-        "CREATE TABLE IF NOT EXISTS items (id integer primary key not null, name string, date int, count int, group string);"
+        "create table if not exists items (id text primary key not null, name text, place text, date int, count int, datemodified int);"
       );
     },
     (error) => {console.log(error)},
@@ -43,9 +57,16 @@ export default function App() {
     );
     // fetches data from local and cloud
     fetchData();
-  }, [])
+    (async function() {
+      let newMod = await AsyncStorage.getItem("dateModified")
+      newMod = parseInt(newMod);
+      console.log("last mod: " + newMod);
+      setLastMod(newMod);
+    })();
+    
+  }, [settings])
 
-  const db = SQLite.openDatabase("db.db");
+
   const [forceUpdate, forceUpdateId] = useForceUpdate();
 
   // scanner stuff
@@ -56,14 +77,16 @@ export default function App() {
   const hideModal = () => setModalVisible(false);
 
   const showAddModal = () => {setAddModalVisible(true); setScanned(false);};
-  const hideAddModal = () => {setAddModalVisible(false); resetForm();};
+  const hideAddModal = () => {setAddModalVisible(false); resetForm(); setIsEditMode(false)};
+
 
   // date time picker
-    const [datePickerDate, setDatePickerDate] = React.useState(new Date(1598051730000));
+    const [datePickerDate, setDatePickerDate] = React.useState(new Date());
 
     const onChange = (event, selectedDate) => {
       const currentDate = selectedDate;
       setDatePickerDate(currentDate);
+      setForm({...form, date: currentDate.getTime()});
     };
 
     const showMode = (currentMode) => {
@@ -80,28 +103,119 @@ export default function App() {
     };
 
     const resetForm = () => {
-      setForm({name: "", date: null, count: "", group: ""});
+      setForm({name: "", date: null, count: "", place: ""});
     };
 
 
   const addItem = async () => {
+
+    // check if add or edit
+    if(isEditMode) {
+      saveEditItem();
+      return;
+    }
+
     // add item from form to localDatabase and try to sync
-    const dateMod = new Date().getTime();
     console.log("Adding item:", form.name);
 
+    const dateMod = new Date().getTime();
+    await AsyncStorage.setItem("dateModified", dateMod.toString());
+
+    // clean date string
+    setForm({...form, date: cleanTimeString(form.date)});
+    
+    // Make ID
+    const id = await Crypto.digestStringAsync(
+      Crypto.CryptoDigestAlgorithm.SHA256, form.name + form.date + form.count + form.place);
+
     db.transaction((tx) => {
-      tx.executeSql("insert into items (name, date, count, place, dateModified) values (?, ?, ?, ?, ?)", 
-        [form.name, form.date, form.count, form.group, dateMod]);
+      tx.executeSql("insert into items (id, name, place, date, count, dateModified) values (?, ?, ?, ?, ?, ?)", 
+        [id, form.name, form.place, form.date, form.count, dateMod]);
     },
     (err) => {console.log(err)},
     loadDataFromDevice,
     )
     console.log("Trying network");
     if(!isOffline) {
-      const res = await fetch(`${_HOST}/api/send`, {method: "POST", body: JSON.stringify({...form, dateModified: dateMod})})
+      const res = await fetch(`${settings.serverIP}:${settings.serverPort}}/api/send`, {method: "POST", body: JSON.stringify({...form, dateModified: dateMod})})
       const json = await res.json();
       console.log(json);
     }
+    hideAddModal();
+  }
+
+  const deleteItem = async () => {
+     // delete Item from database and try to sync
+     console.log("Deleting item:", form.name);
+     
+     const newDateModified = new Date().getTime();
+     await AsyncStorage.setItem("dateModified", newDateModified.toString());
+
+     // Get ID
+     const id = form.id
+    
+     // Delete from local database
+     db.transaction((tx) => {
+       tx.executeSql("delete from items where id = ?", 
+         [id]);
+     },
+     (err) => {console.log(err)},
+     )
+
+     // Try deleting from server
+     if(!isOffline) {
+       const res = await fetch(`${settings.serverIP}:${settings.serverPort}/api/delete`, {method: "DELETE", body: JSON.stringify({...form})})
+       const json = await res.json();
+       console.log(json);
+     }
+
+     // Remove item from data and rows
+      const newData = data.filter(item => item.id !== id);  
+      setData(newData);
+      setRows(data);
+      setSearchTerm("");
+
+     hideAddModal();
+  }
+
+  const saveEditItem = async () => {
+    // update Item from database and try to sync
+    console.log("Updating item:", form.name);
+
+    // Get ID
+    const id = form.id
+
+    const newDateModified = new Date().getTime();
+    console.log("Settings new date modified: " + newDateModified.toString());
+    await AsyncStorage.setItem("dateModified", newDateModified.toString());
+  
+    // Update
+    db.transaction((tx) => {
+      tx.executeSql("update items set name = ?, place = ?, date= ?, count = ?, dateModified = ? where id = ?", 
+        [form.name, form.place, form.date, form.count, newDateModified, id]);
+    },
+    (err) => {console.log(err)},
+    )
+
+    // Try updating from server
+    if(!isOffline) {
+      const res = await fetch(`${settings.serverIP}:${settings.serverPort}/api/update`, {method: "UPDATE", body: JSON.stringify({...form, dateMod: newDateModified})})
+      const json = await res.json();
+      console.log(json);
+    }
+
+    // Update data and rows
+    const newData = data.map(item => {
+      if(item.id === id) {
+        return {...form};
+      }
+      return item;
+    }
+    );
+    setData(newData);
+    setRows(data);
+    setSearchTerm("");
+
     hideAddModal();
   }
 
@@ -118,7 +232,7 @@ export default function App() {
     try {
       // ping server to see if network is available
 
-      const res = await fetch(`${_HOST}/api/ping`);
+      const res = await fetch(`${settings.serverIP}:${settings.serverPort}/api/ping`);
       const json = await res.json();
     } catch(e) {
       setIsOffline(true);
@@ -129,15 +243,16 @@ export default function App() {
 
 
     try {
-      const localLastChange = await AsyncStorage.getItem("dateModified");
+      let localLastChange = await AsyncStorage.getItem("dateModified");
+      localLastChange = parseInt(localLastChange);
 
       // get last change from server
-      const res = await fetch(`${_HOST}/api/lastChange`);
+      const res = await fetch(`${settings.serverIP}:${settings.serverPort}/api/lastChange`);
       const json = await res.json();
 
       if(localLastChange < json.dateModified) {
         // get all items from server
-        const res = await fetch(`${_HOST}/api/getAll`);
+        const res = await fetch(`${settings.serverIP}:${settings.serverPort}/api/getAll`);
         const json = await res.json();
 
         // delete all items from local database
@@ -151,8 +266,8 @@ export default function App() {
         // add all items from server to local database
         db.transaction((tx) => {
           json.forEach(item => {
-            tx.executeSql("insert into items (name, date, count, place, dateModified) values (?, ?, ?, ?, ?)", 
-              [item.name, item.date, item.count, item.group, item.dateModified]);
+            tx.executeSql("insert into items (id, name, place, date, count, dateModified) values (?, ?, ?, ?, ?, ?)", 
+              [item.id, item.name, item.place, item.date, item.count, item.dateModified]);
           }
           )
         },
@@ -161,10 +276,10 @@ export default function App() {
         )
 
         // set last change to server
-        await AsyncStorage.setItem("dateModified", json.dateModified);
+        await AsyncStorage.setItem("dateModified", json.dateModified.toString());
       } else {
         
-        const res = await fetch(`${_HOST}/api/replace`, {
+        const res = await fetch(`${settings.serverIP}:${settings.serverPort}/api/replace`, {
           method: "POST",
           body: JSON.stringify(data)
         });
@@ -185,7 +300,7 @@ export default function App() {
         const resString = parseInt(res.status.code) == 200 ? res.product.attributes.product : "No results found";
         
         if(res.status.code == 200) {
-          setForm({name: resString, date: datePickerDate, count: "1", group: ""});
+          setForm({name: resString, date: datePickerDate, count: "1", place: ""});
           hideModal();
           showAddModal();
         } else {
@@ -198,45 +313,70 @@ export default function App() {
   }
 
   const CalculateNextDue = (arr) => {
-    if(arr.length == 0) {  return ""; }
+    if(arr.length == 0) {  
+      setNextDue({name: "", date: 0, count: 0, place: "", id: ""});
+      return; 
+    }
     // Initial is first item in array
-    let nextDueEval = arr[0], nextDueTime = new Date(nextDueEval.date).getTime();
+    let nextDueEval = arr[0], nextDueTime = cleanTimeString(nextDueEval.date);
     // Loop through array and keep track of next due date
     arr.forEach(item => {
-        const date = new Date(item.date);
+        const date = item.date;
         // if date is before next due date, set next due date to this date
-        if(date.getTime() < nextDueTime) {
+        if(date < nextDueTime) {
             nextDueEval = item;
-            nextDueTime = date.getTime();
+            nextDueTime = date;
         }
     });
-
-    // get time Diff from today to next due date
-      const now = new Date().getTime();
-      let date = nextDueEval.date;
-
-      let dateString = "";
-      if(date.includes(".")) {
-        // convert date to YYYY-MM-DD
-        dateString = date.split(".");
-        date = new Date(dateString[2], dateString[1]-1, dateString[0]);
-      } else if(date.includes("-")) {
-        dateString = date;
-        date = new Date(dateString);
-      }
-    
-      const dueDate = new Date(date).getTime();
-      const timeDiff = dueDate - now;
-      const diffDays = Math.ceil(timeDiff / (1000 * 3600 * 24));
-
-      setTimeDiff(diffDays);
-
-      // set bg color
-      setIsOverdue(diffDays < 0);
-
-      setNextDue(nextDueEval);
+    setNextDue(nextDueEval);
   }
 
+  const RenderNextDue = () => {
+    // get time Diff from today to next due date
+    const now = cleanTimeString(new Date().getTime());
+    const dueDate = nextDue.date;
+    const timeDiff = dueDate - now;
+
+    let diffDays = Math.ceil(timeDiff / (1000 * 3600 * 24));
+
+    // set bg color
+    const isOverdue = diffDays < 0;
+
+
+
+    // 
+    if(Math.abs(diffDays) > 30) {
+      diffDays = Math.abs(Math.ceil(diffDays /30));
+      if(diffDays > 12) {
+        diffDays = Math.ceil(diffDays / 12) + " years";
+      } else {
+        diffDays = diffDays + " months";
+      }
+    } else {
+      diffDays += " Days";
+    }
+
+    return (
+      <View style={{
+        backgroundColor: '#161616',
+        borderRadius: 10,
+        padding: 10,
+        marginTop: 20,
+        }}>
+        <Text style={{color: "#fff", margin: 10, fontSize: 17}}>{isOverdue ? "Overdue" : "Next due"}</Text>
+        <Text style={{color: "#fff", marginLeft: 10, marginBottom: 20, fontSize: 25, fontWeight: "bold"}}>{nextDue.name}</Text>
+        <Text color="#112e15" style={{backgroundColor: isOverdue ? "#372506" : "#112e15", borderRadius: 20, padding: 20}}>{
+          !isOverdue ? <Text style={{color: "#76e790"}}>{`In ${diffDays}`}</Text> 
+          : <Text style={{color: "#ecae43"}}>{`Since ${diffDays}`}</Text>}</Text>
+      </View>
+    )
+
+  }
+
+  // handle re-calculating nextDue on data change
+  useEffect(() => {
+    CalculateNextDue(data);
+  }, [data])
 
   // handle search
   useEffect(() => {
@@ -257,29 +397,28 @@ export default function App() {
     });
     setRows(data);
     setSearchTerm("");
-    console.log("new data", data);
   }
 
   const fetchData = async () => {
-    setLoading(true);
 
     // get data from SQL database
     loadDataFromDevice();
 
-    console.log("Data from sql:", data);
-
     setRows(data);
-    CalculateNextDue(data);
-    setLoading(false);
+  }
+
+  const handleRowClick = (item) => {
+    setForm(item);
+    setAddModalVisible(true);
   }
 
   const renderItem = (item) => {
     return (
-        <DataTable.Row key={item._id}>
+        <DataTable.Row onPress={() =>{ handleRowClick(item); setIsEditMode(true)}} key={item.id}>
             <DataTable.Cell>{item.name}</DataTable.Cell>
             <DataTable.Cell>{item.count}</DataTable.Cell>
-            <DataTable.Cell>{item.date}</DataTable.Cell>
-            <DataTable.Cell>{item.group}</DataTable.Cell>
+            <DataTable.Cell>{new Date(item.date).toLocaleDateString()}</DataTable.Cell>
+            <DataTable.Cell>{item.place}</DataTable.Cell>
         </DataTable.Row>
     )
   }
@@ -305,18 +444,22 @@ export default function App() {
           </View>
           <View style={styles.formField}>
             <TextInput onPressIn={showDatepicker} label="Due Date" value={datePickerDate.toLocaleDateString()}
-              onChangeText={text => setForm({...form, date: text})}
              />
           </View>
           <View style={styles.formField}>
             <TextInput label="Count" keyboardType='number-pad' 
             onChangeText={text => setForm({...form, count: text})}
-            value={form.count} />
+            value={form.count.toString()} />
           </View>
           <View style={styles.formField}>
-            <TextInput label="Place"  />
+            <TextInput label="Place" 
+            onChangeText={text => setForm({...form, place: text})}
+            value={form.place}
+             />
           </View>
-          <View style={{backgroundColor: "#5bc569", borderColor: "#5bc569", borderRadius: 10, borderWidth: 2, marginTop: 10 }}><Button onPress={addItem} color="white" icon="plus-box">Add</Button></View>
+          {isEditMode ? <Text style={{color: "white"}}>ID: {form.id}</Text> : null}
+          <View style={{backgroundColor: "#5bc569", borderColor: "#5bc569", borderRadius: 10, borderWidth: 2, marginTop: 10 }}><Button onPress={addItem} color="white" icon="plus-box">{isEditMode ? "Save" : "Add"}</Button></View>
+          {isEditMode ? <View style={{backgroundColor: "#f31260", borderColor: "#f31260", borderRadius: 10, borderWidth: 2, marginTop: 10 }}><Button onPress={deleteItem} color="white" icon="plus-box">Delete</Button></View> : null}
           <View style={{backgroundColor: "transparent", borderColor: "#f5a524", borderRadius: 10, borderWidth: 2, marginTop: 10 }}><Button onPress={hideAddModal} color="#f5a524" icon="close">Close</Button></View>
       </View>
 
@@ -334,20 +477,10 @@ export default function App() {
     </Modal>
 
     <Text style={styles.header}>FoodTracker </Text>
-    {isOffline ? <Text style={{color: "#76e790"}}>offline</Text> : null}
-    
-    <View style={{
-      backgroundColor: '#161616',
-      borderRadius: 10,
-      padding: 10,
-      marginTop: 20,
-      }}>
-      <Text style={{color: "#fff", margin: 10, fontSize: 17}}>Next due</Text>
-      <Text style={{color: "#fff", marginLeft: 10, marginBottom: 20, fontSize: 25, fontWeight: "bold"}}>{nextDue.name}</Text>
-      <Text color="#112e15" style={{backgroundColor: isOverdue ? "#372506" : "#112e15", borderRadius: 20, padding: 20}}>{
-        timeDiff >= 0 ? <Text style={{color: "#76e790"}}>{`In ${timeDiff} days`}</Text> 
-        : <Text style={{color: "#ecae43"}}>{`Overdue since ${Math.abs(timeDiff)} days`}</Text>}</Text>
-    </View>
+    {isOffline ? <Text style={{color: "#76e790"}}>Offline mode</Text> : null}
+    <Text style={{color: "#76e790"}}>Last modified: {new Date(lastMod).toLocaleDateString()}</Text>
+
+    <RenderNextDue />
 
     <View style={{flex: 1, flexDirection: "row", justifyContent: "center", marginBottom: 10, marginTop: 10}}>
       <View style={{backgroundColor: "transparent", borderColor: "#5bc569", borderRadius: 10, borderWidth: 2, marginRight: 10}}><Button onPress={showModal} color="#5bc569" icon="qrcode">Scan</Button></View>
@@ -355,7 +488,7 @@ export default function App() {
     </View>
     <View><Searchbar style={styles.input} placeholder="Search..." onChangeText={setSearchTerm}/></View>
     
-    <DataTable>
+    <DataTable style={{marginBottom: 20}} >
       <DataTable.Header>
         <DataTable.Title>Name</DataTable.Title>
         <DataTable.Title numeric>#</DataTable.Title>
@@ -368,7 +501,7 @@ export default function App() {
       ))}
 
     </DataTable>
-      
+
     <StatusBar style="light" />
   </ScrollView>
    
