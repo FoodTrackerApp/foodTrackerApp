@@ -26,7 +26,7 @@ export default function Main() {
   const renderScene = ({ route }) => {
     switch (route.key) {
       case 'home':
-        return <Home settings={settings} />;
+        return <Home settings={settings} setSettings={setSettings} />;
       case 'settings':
         return <Settings setSettings={setSettings} />;
       default:

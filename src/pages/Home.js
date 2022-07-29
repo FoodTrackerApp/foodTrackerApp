@@ -28,7 +28,7 @@ function cleanTimeString(str) {
 }
 
 
-export default function Home({ settings }) {
+export default function Home({ settings, setSettings }) {
 
   const [searchTerm, setSearchTerm] = React.useState("");
   const [data, setData] = React.useState([]);
@@ -46,6 +46,15 @@ export default function Home({ settings }) {
   const db = SQLite.openDatabase("item.db");
 
   useEffect(() => {
+    // load settings
+    (async function() {
+      const settings = await AsyncStorage.getItem("settings");
+      if(settings !== null) {
+        const parsedSettings = JSON.parse(settings);
+        setSettings(parsedSettings);
+      } 
+    })();
+
     // make items database if not existent
     db.transaction((tx) => {
       tx.executeSql(
@@ -53,18 +62,17 @@ export default function Home({ settings }) {
       );
     },
     (error) => {console.log(error)},
-    () => {console.log("Created items table")}
     );
     // fetches data from local and cloud
     fetchData();
     (async function() {
       let newMod = await AsyncStorage.getItem("dateModified")
       newMod = parseInt(newMod);
-      console.log("last mod: " + newMod);
       setLastMod(newMod);
     })();
-    
-  }, [settings])
+    sync();
+
+  }, [])
 
 
   const [forceUpdate, forceUpdateId] = useForceUpdate();
@@ -120,6 +128,7 @@ export default function Home({ settings }) {
 
     const dateMod = new Date().getTime();
     await AsyncStorage.setItem("dateModified", dateMod.toString());
+    setLastMod(dateMod);
 
     // clean date string
     setForm({...form, date: cleanTimeString(form.date)});
@@ -137,45 +146,51 @@ export default function Home({ settings }) {
     )
     console.log("Trying network");
     if(!isOffline) {
-      const res = await fetch(`${settings.serverIP}:${settings.serverPort}}/api/send`, {method: "POST", body: JSON.stringify({...form, dateModified: dateMod})})
-      const json = await res.json();
-      console.log(json);
+      const sendBody = {
+        _id: id,
+        name: form.name,
+        place: form.place,
+        date: form.date,
+        count: form.count,
+      }
+      const url = `http://${settings.serverIP}:${settings.serverPort}/api/send`
+      console.log("Sending to:", url);
+      const res = await fetch(url, {method: "POST", body: JSON.stringify(sendBody)})
     }
     hideAddModal();
   }
 
   const deleteItem = async () => {
-     // delete Item from database and try to sync
-     console.log("Deleting item:", form.name);
+    // delete Item from database and try to sync
+    console.log("Deleting item:", form.name);
      
-     const newDateModified = new Date().getTime();
-     await AsyncStorage.setItem("dateModified", newDateModified.toString());
+    const newDateModified = new Date().getTime();
+    await AsyncStorage.setItem("dateModified", newDateModified.toString());
+    setLastMod(newDateModified);
 
-     // Get ID
-     const id = form.id
-    
-     // Delete from local database
-     db.transaction((tx) => {
-       tx.executeSql("delete from items where id = ?", 
-         [id]);
-     },
-     (err) => {console.log(err)},
-     )
+    // Get ID
+    const id = form.id
+  
+    // Delete from local database
+    db.transaction((tx) => {
+      tx.executeSql("delete from items where id = ?", 
+        [id]);
+    },
+    (err) => {console.log(err)},
+    )
 
-     // Try deleting from server
-     if(!isOffline) {
-       const res = await fetch(`${settings.serverIP}:${settings.serverPort}/api/delete`, {method: "DELETE", body: JSON.stringify({...form})})
-       const json = await res.json();
-       console.log(json);
-     }
+    // Try deleting from server
+    if(!isOffline) {
+      const res = await fetch(`${settings.serverIP}:${settings.serverPort}/api/delete`, {method: "DELETE", body: JSON.stringify({...form})})
+    }
 
-     // Remove item from data and rows
-      const newData = data.filter(item => item.id !== id);  
-      setData(newData);
-      setRows(data);
-      setSearchTerm("");
+    // Remove item from data and rows
+    const newData = data.filter(item => item.id !== id);  
+    setData(newData);
+    setRows(data);
+    setSearchTerm("");
 
-     hideAddModal();
+    hideAddModal();
   }
 
   const saveEditItem = async () => {
@@ -188,6 +203,7 @@ export default function Home({ settings }) {
     const newDateModified = new Date().getTime();
     console.log("Settings new date modified: " + newDateModified.toString());
     await AsyncStorage.setItem("dateModified", newDateModified.toString());
+    setLastMod(newDateModified);
   
     // Update
     db.transaction((tx) => {
@@ -199,9 +215,7 @@ export default function Home({ settings }) {
 
     // Try updating from server
     if(!isOffline) {
-      const res = await fetch(`${settings.serverIP}:${settings.serverPort}/api/update`, {method: "UPDATE", body: JSON.stringify({...form, dateMod: newDateModified})})
-      const json = await res.json();
-      console.log(json);
+      const res = await fetch(`${settings.serverIP}:${settings.serverPort}/api/send`, {method: "POST", body: JSON.stringify({...form, dateMod: newDateModified, toUpdate: true})})
     }
 
     // Update data and rows
@@ -219,21 +233,20 @@ export default function Home({ settings }) {
     hideAddModal();
   }
 
-  useEffect(() => {
-    if(!isOffline) {
-      sync();
-    }
-  }, [isOffline])
-
   // iterates through data and removes old duplicates
   const sync = async () => {
-    if(isOffline) { return; }
-
+    console.log("Syncing");
     try {
       // ping server to see if network is available
+      const url = `${settings.serverIP}:${settings.serverPort}`;
+      const res = await fetch(`http://${url}/api/ping`);
+      if(res.status == 200) {
+        ToastAndroid.show(`Network is available`, ToastAndroid.SHORT);
+        setIsOffline(false);
+      } else {
+        throw new Error("Network is not available");
+      }
 
-      const res = await fetch(`${settings.serverIP}:${settings.serverPort}/api/ping`);
-      const json = await res.json();
     } catch(e) {
       setIsOffline(true);
       // show toast
@@ -241,18 +254,20 @@ export default function Home({ settings }) {
       return;
     }
 
-
     try {
       let localLastChange = await AsyncStorage.getItem("dateModified");
       localLastChange = parseInt(localLastChange);
 
       // get last change from server
-      const res = await fetch(`${settings.serverIP}:${settings.serverPort}/api/lastChange`);
-      const json = await res.json();
+      const res = await fetch(`http://${settings.serverIP}:${settings.serverPort}/api/lastmod`);
+      const cloudDate = await res.json();
 
-      if(localLastChange < json.dateModified) {
+      if(localLastChange < cloudDate) {
+
+        console.log("Local database is outdated");
+
         // get all items from server
-        const res = await fetch(`${settings.serverIP}:${settings.serverPort}/api/getAll`);
+        const res = await fetch(`http://${settings.serverIP}:${settings.serverPort}/api/get`, {method: "GET"});
         const json = await res.json();
 
         // delete all items from local database
@@ -262,7 +277,7 @@ export default function Home({ settings }) {
         null,
         forceUpdate
         )
-
+        
         // add all items from server to local database
         db.transaction((tx) => {
           json.forEach(item => {
@@ -276,15 +291,24 @@ export default function Home({ settings }) {
         )
 
         // set last change to server
-        await AsyncStorage.setItem("dateModified", json.dateModified.toString());
+        await AsyncStorage.setItem("dateModified", cloudDate.toString());
+
+        // change _id to id property
+        const newData = json.map(item => {
+          return {...item, id: item._id};
+        });
+
+        // set data and rows to new data
+        setData(newData);
+        setRows(newData);
       } else {
+        console.log("Local database is up to date");
+        console.log("Overriding cloud data");
         
-        const res = await fetch(`${settings.serverIP}:${settings.serverPort}/api/replace`, {
+        const res = await fetch(`http://${settings.serverIP}:${settings.serverPort}/api/replace`, {
           method: "POST",
           body: JSON.stringify(data)
         });
-        const json = res.json();
-        console.log(json);
       }
 
     } catch(e) {
@@ -387,7 +411,6 @@ export default function Home({ settings }) {
   }, [searchTerm, data, setRows])
 
   const loadDataFromDevice = () => {
-    console.log("Loading SQL data");
     db.transaction((tx) => {
     tx.executeSql(
         `select * from items`,
@@ -476,9 +499,14 @@ export default function Home({ settings }) {
       <View style={{ padding: 10 }}><Button style={{marginTop: 10}} onPress={hideModal}>Close</Button></View>
     </Modal>
 
-    <Text style={styles.header}>FoodTracker </Text>
+    <View style={{flex: 1, flexDirection: "row", alignContent: "center", justifyContent: "space-between"}}>
+      <Text style={styles.header}>FoodTracker </Text>
+      <IconButton icon="refresh" iconColor="white" size={20} onPress={() => sync()} />
+    </View>
+
     {isOffline ? <Text style={{color: "#76e790"}}>Offline mode</Text> : null}
-    <Text style={{color: "#76e790"}}>Last modified: {new Date(lastMod).toLocaleDateString()}</Text>
+    <Text style={{color: "#76e790"}}>Last modified: {new Date(lastMod).toUTCString()}</Text>
+    <Text style={{color: "#76e790"}}>Server URL: {settings.serverIP}:{settings.serverPort}</Text>
 
     <RenderNextDue />
 

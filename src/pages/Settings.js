@@ -29,6 +29,7 @@ export default function Settings({ setSettings }) {
                 const parsedSettings = JSON.parse(settings);
                 setOriginalSettings(parsedSettings);
                 setForm(parsedSettings);
+                setSettings(form);
             } else {
                 ToastAndroid.show("No settings found", ToastAndroid.SHORT);
             }
