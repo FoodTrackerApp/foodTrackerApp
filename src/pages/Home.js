@@ -45,6 +45,7 @@ export default function Home({ settings, setSettings }) {
 
   const db = SQLite.openDatabase("item.db");
 
+  // init setup
   useEffect(() => {
     // load settings
     (async function() {
@@ -58,15 +59,15 @@ export default function Home({ settings, setSettings }) {
     // make items database if not existent
     db.transaction((tx) => {
       tx.executeSql(
-        "create table if not exists items (id text primary key not null, name text, place text, date int, count int, datemodified int);"
+        "create table if not exists items (id text primary key not null, name text, place text, date int, count int, datemodified int, deleted int);"
       );
     },
     (error) => {console.log(error)},
     );
-    // fetches data from local and cloud
-    fetchData();
+    // fetches data from local
+    loadDataFromDevice();
     (async function() {
-      let newMod = await AsyncStorage.getItem("dateModified")
+      let newMod = await AsyncStorage.getItem("datemodified")
       newMod = parseInt(newMod);
       setLastMod(newMod);
     })();
@@ -74,6 +75,12 @@ export default function Home({ settings, setSettings }) {
 
   }, [])
 
+  // force offline when offline mode is enabled
+  useEffect(() => {
+    if(!isOffline && settings.offlineMode) {
+      setIsOffline(true);
+    }
+  }, [isOffline, settings])
 
   const [forceUpdate, forceUpdateId] = useForceUpdate();
 
@@ -114,6 +121,16 @@ export default function Home({ settings, setSettings }) {
       setForm({name: "", date: null, count: "", place: ""});
     };
 
+  const setNewData = (newData) => {
+
+    // filter out deleted items
+    let filteredData = newData.filter(item => item.deleted === null);
+
+    setData(filteredData);
+    setRows(filteredData);
+    setSearchTerm("");
+  }
+
 
   const addItem = async () => {
 
@@ -126,9 +143,10 @@ export default function Home({ settings, setSettings }) {
     // add item from form to localDatabase and try to sync
     console.log("Adding item:", form.name);
 
-    const dateMod = new Date().getTime();
-    await AsyncStorage.setItem("dateModified", dateMod.toString());
-    setLastMod(dateMod);
+    const newDateModified = new Date().getTime();
+    form.datemodified = newDateModified;
+    
+    form.deleted = null;
 
     // clean date string
     setForm({...form, date: cleanTimeString(form.date)});
@@ -137,13 +155,16 @@ export default function Home({ settings, setSettings }) {
     const id = await Crypto.digestStringAsync(
       Crypto.CryptoDigestAlgorithm.SHA256, form.name + form.date + form.count + form.place);
 
+    form.id = id;
+
     db.transaction((tx) => {
-      tx.executeSql("insert into items (id, name, place, date, count, dateModified) values (?, ?, ?, ?, ?, ?)", 
-        [id, form.name, form.place, form.date, form.count, dateMod]);
+      tx.executeSql("insert into items (id, name, place, date, count, datemodified, deleted) values (?, ?, ?, ?, ?, ?, 0)", 
+        [id, form.name, form.place, form.date, form.count, form.datemodified]);
     },
     (err) => {console.log(err)},
-    loadDataFromDevice,
     )
+
+    setNewData([...data, form]);
     console.log("Trying network");
     if(!isOffline) {
       const sendBody = {
@@ -151,13 +172,16 @@ export default function Home({ settings, setSettings }) {
         name: form.name,
         place: form.place,
         date: form.date,
-        count: form.count,
+        count: parseInt(form.count),
+        datemodified: newDateModified,
+        toUpdate: false,
+        deleted: null,
       }
       const url = `http://${settings.serverIP}:${settings.serverPort}/api/send`
-      console.log("Sending to:", url);
-      const res = await fetch(url, {method: "POST", body: JSON.stringify(sendBody)})
+      await fetch(url, {method: "POST", body: JSON.stringify(sendBody)})
     }
     hideAddModal();
+    resetForm();
   }
 
   const deleteItem = async () => {
@@ -165,77 +189,84 @@ export default function Home({ settings, setSettings }) {
     console.log("Deleting item:", form.name);
      
     const newDateModified = new Date().getTime();
-    await AsyncStorage.setItem("dateModified", newDateModified.toString());
-    setLastMod(newDateModified);
+
+    // set new dateModified
+    form.datemodified = newDateModified;
+
+    form.deleted = 1;
 
     // Get ID
     const id = form.id
   
-    // Delete from local database
+    // Add deleted prop to item in local database,
     db.transaction((tx) => {
-      tx.executeSql("delete from items where id = ?", 
-        [id]);
+      tx.executeSql("update items set deleted = 1, datemodified = ? where id = ?",
+        [newDateModified, id]);
+        
     },
     (err) => {console.log(err)},
     )
 
+    let sendBody = form;
+
+    // change id to _id
+    sendBody._id = id;
+    
     // Try deleting from server
     if(!isOffline) {
-      const res = await fetch(`${settings.serverIP}:${settings.serverPort}/api/delete`, {method: "DELETE", body: JSON.stringify({...form})})
+      await fetch(`http://${settings.serverIP}:${settings.serverPort}/api/delete`, {method: "DELETE", body: JSON.stringify(sendBody)})
     }
-
-    // Remove item from data and rows
-    const newData = data.filter(item => item.id !== id);  
-    setData(newData);
-    setRows(data);
-    setSearchTerm("");
+    
+    // update item in data
+    let newData = data.map((ele) => {
+      if(ele.id === id) {
+        return form;
+      } else {
+        return ele;
+      }
+    })
+    setNewData(newData);
 
     hideAddModal();
   }
 
   const saveEditItem = async () => {
     // update Item from database and try to sync
-    console.log("Updating item:", form.name);
+    console.log("Updating item:", form);
 
     // Get ID
     const id = form.id
 
     const newDateModified = new Date().getTime();
-    console.log("Settings new date modified: " + newDateModified.toString());
-    await AsyncStorage.setItem("dateModified", newDateModified.toString());
-    setLastMod(newDateModified);
   
     // Update
     db.transaction((tx) => {
-      tx.executeSql("update items set name = ?, place = ?, date= ?, count = ?, dateModified = ? where id = ?", 
+      tx.executeSql("update items set name = ?, place = ?, date= ?, count = ?, datemodified = ? where id = ?", 
         [form.name, form.place, form.date, form.count, newDateModified, id]);
     },
     (err) => {console.log(err)},
     )
-
-    // Try updating from server
-    if(!isOffline) {
-      const res = await fetch(`${settings.serverIP}:${settings.serverPort}/api/send`, {method: "POST", body: JSON.stringify({...form, dateMod: newDateModified, toUpdate: true})})
-    }
-
-    // Update data and rows
+    
+    // Update data and rows with the edited item
     const newData = data.map(item => {
       if(item.id === id) {
         return {...form};
-      }
-      return item;
-    }
-    );
-    setData(newData);
-    setRows(data);
-    setSearchTerm("");
+      } return item; });
+
+    setNewData(newData);
 
     hideAddModal();
   }
 
   // iterates through data and removes old duplicates
   const sync = async () => {
+    if(settings.offlineMode) {
+      ToastAndroid.show("Disable offline mode to sync with server", ToastAndroid.SHORT)
+      return;
+    }
     console.log("Syncing");
+
+    // testing network
     try {
       // ping server to see if network is available
       const url = `${settings.serverIP}:${settings.serverPort}`;
@@ -255,66 +286,57 @@ export default function Home({ settings, setSettings }) {
     }
 
     try {
-      let localLastChange = await AsyncStorage.getItem("dateModified");
-      localLastChange = parseInt(localLastChange);
 
-      // get last change from server
-      const res = await fetch(`http://${settings.serverIP}:${settings.serverPort}/api/lastmod`);
-      const cloudDate = await res.json();
+      // get all items from server
+      const res = await fetch(`http://${settings.serverIP}:${settings.serverPort}/api/get`, {method: "GET"});
+      const json = await res.json();
 
-      if(localLastChange < cloudDate) {
+      // get all items from local
+      const local = data;
 
-        console.log("Local database is outdated");
+      // get all items from server and change _id to id
+      const server = json.map(item => {
+        return {...item, id: item._id};
+      });
 
-        // get all items from server
-        const res = await fetch(`http://${settings.serverIP}:${settings.serverPort}/api/get`, {method: "GET"});
-        const json = await res.json();
-
-        // delete all items from local database
-        db.transaction((tx) => {
-          tx.executeSql("delete from items");
-        },
-        null,
-        forceUpdate
-        )
-        
-        // add all items from server to local database
-        db.transaction((tx) => {
-          json.forEach(item => {
-            tx.executeSql("insert into items (id, name, place, date, count, dateModified) values (?, ?, ?, ?, ?, ?)", 
-              [item.id, item.name, item.place, item.date, item.count, item.dateModified]);
+      // add all items from server to local database
+      db.transaction((tx) => {
+        server.forEach(item => {
+          // update local database if item already exists in local
+          const isLocal = local.find(localItem => localItem.id === item.id);
+          if(isLocal && (parseInt(item.datemodified) > parseInt(isLocal.datemodified))) {
+            console.log("Updating local database:", item.name);
+            tx.executeSql("update items set name = ?, place = ?, date = ?, count = ?, datemodified = ? where id = ?", 
+              [item.name, item.place, item.date, item.count, item.datemodified, item.id]);
+                // Update data and rows with the edited item
+            const newData = data.map(ditem => {
+              if(ditem.id === item.id) {
+                return {...item};
+              } return ditem; });
+            setNewData(newData);
+          } else if(!isLocal) {
+            tx.executeSql("insert into items (id, name, place, date, count, datemodified) values (?, ?, ?, ?, ?, ?)", 
+              [item.id, item.name, item.place, item.date, item.count, item.datemodified]);
+          
+            // Add new item to data and rows
+            const newData = [...data, item];
+            setNewData(newData);
           }
-          )
-        },
-        null,
-        forceUpdate
-        )
+        })
+      },null,forceUpdate)
 
-        // set last change to server
-        await AsyncStorage.setItem("dateModified", cloudDate.toString());
+      // get new items from database
+      //loadDataFromDevice();
 
-        // change _id to id property
-        const newData = json.map(item => {
-          return {...item, id: item._id};
-        });
+      // sync server side
+      await fetch(`http://${settings.serverIP}:${settings.serverPort}/api/replace`, {
+        method: "POST",
+        body: JSON.stringify(data)
+      });
+      
+      console.log("Synced");
 
-        // set data and rows to new data
-        setData(newData);
-        setRows(newData);
-      } else {
-        console.log("Local database is up to date");
-        console.log("Overriding cloud data");
-        
-        const res = await fetch(`http://${settings.serverIP}:${settings.serverPort}/api/replace`, {
-          method: "POST",
-          body: JSON.stringify(data)
-        });
-      }
-
-    } catch(e) {
-      console.error(e);
-      ToastAndroid.show("Error syncing with server: " + e, ToastAndroid.LONG);
-    }
+    } catch(e) { ToastAndroid.show("Error syncing with server: " + e, ToastAndroid.LONG) }
   }
 
   const handleBarCodeScanned = ({ type, data }) => {
@@ -336,13 +358,20 @@ export default function Home({ settings, setSettings }) {
     }
   }
 
+  const getPermissions = () => {
+    (async () => {
+      const { status } = await BarCodeScanner.requestPermissionsAsync();
+      setHasPermission(status === 'granted');
+    })();
+  }
+
   const CalculateNextDue = (arr) => {
     if(arr.length == 0) {  
       setNextDue({name: "", date: 0, count: 0, place: "", id: ""});
       return; 
     }
     // Initial is first item in array
-    let nextDueEval = arr[0], nextDueTime = cleanTimeString(nextDueEval.date);
+    let nextDueEval = arr[0], nextDueTime = nextDueEval.date;
     // Loop through array and keep track of next due date
     arr.forEach(item => {
         const date = item.date;
@@ -357,18 +386,15 @@ export default function Home({ settings, setSettings }) {
 
   const RenderNextDue = () => {
     // get time Diff from today to next due date
-    const now = cleanTimeString(new Date().getTime());
+    const now = new Date().getTime();
     const dueDate = nextDue.date;
     const timeDiff = dueDate - now;
 
     let diffDays = Math.ceil(timeDiff / (1000 * 3600 * 24));
 
     // set bg color
-    const isOverdue = diffDays < 0;
+    const isOverdue = diffDays <= 0;
 
-
-
-    // 
     if(Math.abs(diffDays) > 30) {
       diffDays = Math.abs(Math.ceil(diffDays /30));
       if(diffDays > 12) {
@@ -377,7 +403,13 @@ export default function Home({ settings, setSettings }) {
         diffDays = diffDays + " months";
       }
     } else {
-      diffDays += " Days";
+      if(diffDays == 0) {
+        diffDays = "Today";
+      } else if(diffDays == 1) {
+        diffDays = "Tomorrow";
+      } else {
+        diffDays += " Days";
+      }
     }
 
     return (
@@ -390,8 +422,8 @@ export default function Home({ settings, setSettings }) {
         <Text style={{color: "#fff", margin: 10, fontSize: 17}}>{isOverdue ? "Overdue" : "Next due"}</Text>
         <Text style={{color: "#fff", marginLeft: 10, marginBottom: 20, fontSize: 25, fontWeight: "bold"}}>{nextDue.name}</Text>
         <Text color="#112e15" style={{backgroundColor: isOverdue ? "#372506" : "#112e15", borderRadius: 20, padding: 20}}>{
-          !isOverdue ? <Text style={{color: "#76e790"}}>{`In ${diffDays}`}</Text> 
-          : <Text style={{color: "#ecae43"}}>{`Since ${diffDays}`}</Text>}</Text>
+          !isOverdue ? <Text style={{color: "#76e790", fontWeight: "bold"}}>{`In ${diffDays}`}</Text> 
+          : <Text style={{color: "#ecae43", fontWeight: "bold"}}>{`Since ${diffDays}`}</Text>}</Text>
       </View>
     )
 
@@ -410,47 +442,33 @@ export default function Home({ settings, setSettings }) {
     } else { setRows(data) }
   }, [searchTerm, data, setRows])
 
+  // load data from SQLite database into states
   const loadDataFromDevice = () => {
     db.transaction((tx) => {
     tx.executeSql(
         `select * from items`,
         [],
-        (_,{rows: {_array}}) => setData(_array)
+        (_,{rows: {_array}}) => setNewData(_array)
       )
     });
-    setRows(data);
-    setSearchTerm("");
   }
 
-  const fetchData = async () => {
-
-    // get data from SQL database
-    loadDataFromDevice();
-
-    setRows(data);
-  }
-
+  // handles opening modal when clicking on table row
   const handleRowClick = (item) => {
     setForm(item);
     setAddModalVisible(true);
   }
 
+  // handles rendering a row in the table
   const renderItem = (item) => {
     return (
-        <DataTable.Row onPress={() =>{ handleRowClick(item); setIsEditMode(true)}} key={item.id}>
-            <DataTable.Cell>{item.name}</DataTable.Cell>
-            <DataTable.Cell>{item.count}</DataTable.Cell>
-            <DataTable.Cell>{new Date(item.date).toLocaleDateString()}</DataTable.Cell>
-            <DataTable.Cell>{item.place}</DataTable.Cell>
-        </DataTable.Row>
+    <DataTable.Row onPress={() =>{ handleRowClick(item); setIsEditMode(true)}} key={item.id}>
+        <DataTable.Cell>{item.name}</DataTable.Cell>
+        <DataTable.Cell>{item.count}</DataTable.Cell>
+        <DataTable.Cell>{new Date(item.date).toLocaleDateString()}</DataTable.Cell>
+        <DataTable.Cell>{item.place}</DataTable.Cell>
+    </DataTable.Row>
     )
-  }
-
-  const getPermissions = () => {
-    (async () => {
-      const { status } = await BarCodeScanner.requestPermissionsAsync();
-      setHasPermission(status === 'granted');
-    })();
   }
 
   return (
@@ -504,8 +522,6 @@ export default function Home({ settings, setSettings }) {
     </View>
 
     {isOffline ? <Text style={{color: "#76e790"}}>Offline mode</Text> : null}
-    <Text style={{color: "#76e790"}}>Last modified: {new Date(lastMod).toUTCString()}</Text>
-    <Text style={{color: "#76e790"}}>Server URL: {settings.serverIP}:{settings.serverPort}</Text>
 
     <RenderNextDue />
 

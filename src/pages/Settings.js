@@ -1,4 +1,4 @@
-import { DataTable, Searchbar, IconButton, Button, Divider, TextInput } from 'react-native-paper';
+import { IconButton, Button, Divider, TextInput, Switch } from 'react-native-paper';
 import { StatusBar } from 'expo-status-bar';
 import { StyleSheet, Text, View, ScrollView, Modal, ToastAndroid } from 'react-native';
 import React, { useState } from "react";
@@ -6,9 +6,10 @@ import { useEffect } from 'react';
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-export default function Settings({ setSettings }) {
-    const [form, setForm] = React.useState({serverIP: "", serverPort: ""});
-    const [originalSettings, setOriginalSettings] = React.useState({serverIP: "", serverPort: ""});
+export default function Settings({ setSettings, settings }) {
+    const [form, setForm] = React.useState({serverIP: "", serverPort: "", offlineMode: false});
+    const [originalSettings, setOriginalSettings] = React.useState({serverIP: "", serverPort: "", offlineMode: false});
+    const [unsavedChanges, setUnsavedChanges] = React.useState(false);
 
     const saveSettings = async () => {
         try {
@@ -44,17 +45,29 @@ export default function Settings({ setSettings }) {
         readSettings();
     }, []);
 
+    // check unsaved changes
+    useEffect(() => {
+      if(JSON.stringify(form) !== JSON.stringify(originalSettings)) {
+        setUnsavedChanges(true);
+      }
+      else {  
+        setUnsavedChanges(false);
+      }
+    }, [form]);
+
+
     return (
     <>
     <View style={{ flex: 1, backgroundColor: '#000000', color: "#fff", padding: 20, paddingTop: 60 }}>
         <Text style={{color:"white", fontSize: 20, margin: 10, fontWeight: "bold"}}>Settings</Text>
+        <IconButton icon="refresh" iconColor="white" size={20} onPress={() => readSettings()} />
         <View style={styles.formField}>
             <TextInput label="Server IP"
                 value={form.serverIP}
                 onChangeText={text => setForm({...form, serverIP: text})}
                 keyboardType="numeric"
                 right={form.serverIP !== originalSettings.serverIP ? <TextInput.Icon name="exclamation" /> : null}
-                activeUnderlineColor={form.serverIP !== originalSettings.serverIP ? "#ff0000" : "#fff"}
+                activeUnderlineColor={form.serverIP !== originalSettings.serverIP ? "#ecae43" : "#fff"}
             />
         </View>
         <View style={styles.formField}>
@@ -63,10 +76,20 @@ export default function Settings({ setSettings }) {
                 onChangeText={text => setForm({...form, serverPort: text})}
                 keyboardType="numeric"
                 right={form.serverPort !== originalSettings.serverPort ? <TextInput.Icon name="exclamation" /> : null}
-                activeUnderlineColor={form.serverPort !== originalSettings.serverPort ? "#ff0000" : "#fff"}
+                activeUnderlineColor={form.serverPort !== originalSettings.serverPort ? "#ecae43" : "#fff"}
             />
         </View>
-        <View style={{backgroundColor: "#5bc569", borderColor: "#5bc569", borderRadius: 10, borderWidth: 2, marginTop: 10 }}><Button onPress={saveSettings} color="white" icon="content-save">Save</Button></View>
+        <View style={{margin: 10, flex: 1, height: 10, flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between", padding: 0}}>
+        <Text style={{color:"white", fontSize: 15
+        , width:150, margin: 10, marginLeft: 0}}>Offline mode</Text>
+          <Switch 
+            value={form.offlineMode}
+            onValueChange={value => setForm({...form, offlineMode: value})}
+            color="#76e790"
+            style={{ width: 70, marginBottom: 0}}
+          />
+        </View>
+        <View style={{backgroundColor: unsavedChanges ? "#ecae43" : "#5bc569", borderColor: unsavedChanges ? "#372506" : "#5bc569", borderRadius: 10, borderWidth: 2, marginTop: 10 }}><Button onPress={saveSettings} color="white" icon="content-save">Save</Button></View>
     </View>
     </>
     )
