@@ -1,6 +1,6 @@
 import { StatusBar } from 'expo-status-bar';
 import { StyleSheet, Text, View, ScrollView, Modal, ToastAndroid } from 'react-native';
-import { DataTable, Searchbar, IconButton, Button, Divider, TextInput } from 'react-native-paper';
+import { DataTable, Searchbar, IconButton, Button, TextInput } from 'react-native-paper';
 import React, { useState } from "react";
 import { useEffect } from 'react';
 import { BarCodeScanner } from 'expo-barcode-scanner';
@@ -37,7 +37,8 @@ export default function Home({ settings, setSettings }) {
   const [form, setForm] = React.useState({name: "", date: datePickerDate, count: "", place: "", id: ""});
   const [isOffline, setIsOffline] = React.useState(false);
   const [isEditMode, setIsEditMode] = React.useState(false);
-  const [lastMod, setLastMod] = React.useState(0);
+  const [isSearching, setIsSearching] = React.useState(false);
+
 
   // modal stuff
   const [modalVisible, setModalVisible] = React.useState(false);
@@ -56,7 +57,7 @@ export default function Home({ settings, setSettings }) {
       } 
     })();
 
-    // make items database if not existent
+    // make itemsdb database if not existent
     db.transaction((tx) => {
       tx.executeSql(
         "create table if not exists items (id text primary key not null, name text, place text, date int, count int, datemodified int, deleted int);"
@@ -65,13 +66,11 @@ export default function Home({ settings, setSettings }) {
     (error) => {console.log(error)},
     );
     // fetches data from local
-    loadDataFromDevice();
     (async function() {
-      let newMod = await AsyncStorage.getItem("datemodified")
-      newMod = parseInt(newMod);
-      setLastMod(newMod);
+      await loadDataFromDevice();
+      await sync();
     })();
-    sync();
+
 
   }, [])
 
@@ -122,13 +121,16 @@ export default function Home({ settings, setSettings }) {
     };
 
   const setNewData = (newData) => {
+    return new Promise((resolve, reject) => {
+      // filter out deleted itemsdb
+      let filteredData = newData.filter(item => item.deleted !== 1);
 
-    // filter out deleted items
-    let filteredData = newData.filter(item => item.deleted === null);
+      setData(filteredData);
+      setRows(filteredData);
+      setSearchTerm("");
+      resolve();
+    })
 
-    setData(filteredData);
-    setRows(filteredData);
-    setSearchTerm("");
   }
 
 
@@ -166,6 +168,7 @@ export default function Home({ settings, setSettings }) {
 
     setNewData([...data, form]);
     console.log("Trying network");
+    
     if(!isOffline) {
       const sendBody = {
         _id: id,
@@ -287,19 +290,19 @@ export default function Home({ settings, setSettings }) {
 
     try {
 
-      // get all items from server
+      // get all itemsdb from server
       const res = await fetch(`http://${settings.serverIP}:${settings.serverPort}/api/get`, {method: "GET"});
       const json = await res.json();
 
-      // get all items from local
+      // get all itemsdb from local
       const local = data;
 
-      // get all items from server and change _id to id
+      // get all itemsdb from server and change _id to id
       const server = json.map(item => {
         return {...item, id: item._id};
       });
 
-      // add all items from server to local database
+      // add all itemsdb from server to local database
       db.transaction((tx) => {
         server.forEach(item => {
           // update local database if item already exists in local
@@ -325,7 +328,7 @@ export default function Home({ settings, setSettings }) {
         })
       },null,forceUpdate)
 
-      // get new items from database
+      // get new itemsdb from database
       //loadDataFromDevice();
 
       // sync server side
@@ -384,7 +387,7 @@ export default function Home({ settings, setSettings }) {
     setNextDue(nextDueEval);
   }
 
-  const RenderNextDue = () => {
+  const RenderNextDue = () => { 
     // get time Diff from today to next due date
     const now = new Date().getTime();
     const dueDate = nextDue.date;
@@ -437,32 +440,37 @@ export default function Home({ settings, setSettings }) {
   // handle search
   useEffect(() => {
     if(searchTerm.length > 0) {
-      const filteredRows = data.filter(item => item.name.toLowerCase().includes(searchTerm.toLowerCase()))
+      const filteredRows = data.filter(item => item.name.toLowerCase().includes(searchTerm.toLowerCase()) || item.place.toLowerCase().includes(searchTerm.toLowerCase()));
       setRows(filteredRows)
     } else { setRows(data) }
   }, [searchTerm, data, setRows])
 
   // load data from SQLite database into states
   const loadDataFromDevice = () => {
-    db.transaction((tx) => {
-    tx.executeSql(
-        `select * from items`,
-        [],
-        (_,{rows: {_array}}) => setNewData(_array)
-      )
-    });
+    return new Promise((resolve ,reject) => {
+      db.transaction((tx) => {
+      tx.executeSql(
+          `select * from items`,
+          [],
+          async (_,{rows: {_array}}) => {await setNewData(_array); resolve();},
+        )
+      });
+    }) 
   }
 
   // handles opening modal when clicking on table row
   const handleRowClick = (item) => {
     setForm(item);
     setAddModalVisible(true);
+    setIsEditMode(true);
   }
+
+  const tableColumns = ["name", "count", "date", "place"];
 
   // handles rendering a row in the table
   const renderItem = (item) => {
     return (
-    <DataTable.Row onPress={() =>{ handleRowClick(item); setIsEditMode(true)}} key={item.id}>
+    <DataTable.Row onPress={() =>{ handleRowClick(item)}} key={item.id}>
         <DataTable.Cell>{item.name}</DataTable.Cell>
         <DataTable.Cell>{item.count}</DataTable.Cell>
         <DataTable.Cell>{new Date(item.date).toLocaleDateString()}</DataTable.Cell>
@@ -479,28 +487,48 @@ export default function Home({ settings, setSettings }) {
         <Text style={{color:"white", fontSize: 20, margin: 10, fontWeight: "bold"}}>Add new</Text>
           <View style={styles.formField}>
             <TextInput label="Name"
+              mode="outlined"
               value={form.name}
               onChangeText={text => setForm({...form, name: text})}
              />
           </View>
           <View style={styles.formField}>
-            <TextInput onPressIn={showDatepicker} label="Due Date" value={datePickerDate.toLocaleDateString()}
+            <TextInput 
+            mode="outlined"
+            onPressIn={showDatepicker} 
+            label="Due Date" 
+            value={datePickerDate.toLocaleDateString()}
              />
           </View>
           <View style={styles.formField}>
-            <TextInput label="Count" keyboardType='number-pad' 
-            onChangeText={text => setForm({...form, count: text})}
-            value={form.count.toString()} />
+            <TextInput 
+              label="Count" 
+              keyboardType='number-pad' 
+              mode="outlined"
+              onChangeText={text => setForm({...form, count: text})}
+              value={form.count.toString()} 
+            />
           </View>
           <View style={styles.formField}>
-            <TextInput label="Place" 
-            onChangeText={text => setForm({...form, place: text})}
-            value={form.place}
-             />
+            <TextInput 
+              label="Place" 
+              onChangeText={text => setForm({...form, place: text})}
+              value={form.place}
+              mode="outlined"
+            />
           </View>
-          <View style={{backgroundColor: "#5bc569", borderColor: "#5bc569", borderRadius: 10, borderWidth: 2, marginTop: 10 }}><Button onPress={addItem} color="white" icon="plus-box">{isEditMode ? "Save" : "Add"}</Button></View>
-          {isEditMode ? <View style={{backgroundColor: "#f31260", borderColor: "#f31260", borderRadius: 10, borderWidth: 2, marginTop: 10 }}><Button onPress={deleteItem} color="white" icon="plus-box">Delete</Button></View> : null}
-          <View style={{backgroundColor: "transparent", borderColor: "#f5a524", borderRadius: 10, borderWidth: 2, marginTop: 10 }}><Button onPress={hideAddModal} color="#f5a524" icon="close">Close</Button></View>
+          <View style={{backgroundColor: "#5bc569", borderColor: "#5bc569", borderRadius: 10, borderWidth: 2, marginTop: 10 }}><Button mode="contained" onPress={addItem} icon="plus-box">{isEditMode ? "Save" : "Add"}</Button></View>
+          {isEditMode ? <View style={{backgroundColor: "#f31260", borderColor: "#f31260", borderRadius: 10, borderWidth: 2, marginTop: 10 }}><Button onPress={deleteItem} textColor="white" icon="delete">Delete</Button></View> : null}
+          <Button 
+            onPress={hideAddModal} 
+            textColor="#ccc"
+            mode="elevated"
+            style={{marginTop: 10}}
+            icon="close"
+            >
+            Close
+          </Button>
+         
       </View>
 
      
@@ -516,25 +544,38 @@ export default function Home({ settings, setSettings }) {
       <View style={{ padding: 10 }}><Button style={{marginTop: 10}} onPress={hideModal}>Close</Button></View>
     </Modal>
 
-    <View style={{flex: 1, flexDirection: "row", alignContent: "center", justifyContent: "space-between"}}>
-      <Text style={styles.header}>FoodTracker </Text>
-      <IconButton icon="refresh" iconColor="white" size={20} onPress={() => sync()} />
-    </View>
+    {isSearching ? null : (
+      <>
+      <View style={{flex: 1, flexDirection: "row", alignContent: "center", justifyContent: "space-between"}}>
+        <Text style={styles.header}>FoodTracker </Text>
+        <IconButton icon="refresh" iconColor="white" size={20} onPress={() => sync()} />
+      </View>
 
-    {isOffline ? <Text style={{color: "#76e790"}}>Offline mode</Text> : null}
+      {isOffline ? <Text style={{color: "#76e790"}}>Offline mode</Text> : null}
 
-    <RenderNextDue />
+      <RenderNextDue />
 
-    <View style={{flex: 1, flexDirection: "row", justifyContent: "center", marginBottom: 10, marginTop: 10}}>
-      <View style={{backgroundColor: "transparent", borderColor: "#5bc569", borderRadius: 10, borderWidth: 2, marginRight: 10}}><Button onPress={showModal} color="#5bc569" icon="qrcode">Scan</Button></View>
-      <View style={{backgroundColor: "#5bc569",     borderColor: "#5bc569", borderRadius: 10, borderWidth: 2,  }}><Button onPress={showAddModal} color="white" icon="plus-box">Add</Button></View>
-    </View>
-    <View><Searchbar style={styles.input} placeholder="Search..." onChangeText={setSearchTerm}/></View>
+      <View style={{flex: 1, flexDirection: "row", justifyContent: "center", marginBottom: 10, marginTop: 10}}>
+        <View style={{backgroundColor: "transparent", borderColor: "#5bc569", borderRadius: 10, borderWidth: 2, marginRight: 10}}><Button onPress={showModal} color="#5bc569" icon="qrcode">Scan</Button></View>
+        <View style={{backgroundColor: "#5bc569",     borderColor: "#5bc569", borderRadius: 10, borderWidth: 2,  }}><Button onPress={showAddModal} mode="contained" icon="plus-box">Add</Button></View>
+      </View>
+
+      </>
+    )}
+
+
+    <Searchbar 
+    style={styles.input} 
+    inputStyle={{fontSize: 15}}
+    placeholder="Search name or place"
+    onFocus={() => setIsSearching(true)}
+    onBlur={() => setIsSearching(false)}
+    onChangeText={setSearchTerm}/>
     
     <DataTable style={{marginBottom: 20}} >
       <DataTable.Header>
-        <DataTable.Title>Name</DataTable.Title>
-        <DataTable.Title numeric>#</DataTable.Title>
+        <DataTable.Title >Name</DataTable.Title>
+        <DataTable.Title >#</DataTable.Title>
         <DataTable.Title>Date</DataTable.Title>
         <DataTable.Title>Place</DataTable.Title>
       </DataTable.Header>
@@ -585,6 +626,7 @@ const styles = StyleSheet.create({
   input: {
     height: 40,
     margin: 12,
+    marginTop: 20,
     borderWidth: 1,
     padding: 10,
     color: "#fff",
