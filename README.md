@@ -64,4 +64,4 @@ and follow the assistant to build for IOS.
 After the build you need to find a way to install it onto your Apple Device.
 I recommend using a 3rd party App launcher.
 
-[FoodTrackerApp]: <https://github.com/cr4yfish/food-tracker-next>
+[FoodTrackerNext]: <https://github.com/cr4yfish/food-tracker-next>
