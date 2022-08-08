@@ -1,6 +1,8 @@
 # foodTrackerApp
 A react native App for the FoodTracker "eco system"
 
+![screenshot](https://i.imgur.com/YqzyJWn.jpg)
+
 For the (optional) Webapp and Server, go to [FoodTrackerNext]
 
 ## Features
