@@ -517,8 +517,10 @@ export default function Home({ settings, setSettings }) {
               mode="outlined"
             />
           </View>
-          <View style={{backgroundColor: "#5bc569", borderColor: "#5bc569", borderRadius: 10, borderWidth: 2, marginTop: 10 }}><Button mode="contained" onPress={addItem} icon="plus-box">{isEditMode ? "Save" : "Add"}</Button></View>
-          {isEditMode ? <View style={{backgroundColor: "#f31260", borderColor: "#f31260", borderRadius: 10, borderWidth: 2, marginTop: 10 }}><Button onPress={deleteItem} textColor="white" icon="delete">Delete</Button></View> : null}
+          <View style={{backgroundColor: "#112e15", borderColor: "#112e15", borderRadius: 10, borderWidth: 2, marginTop: 10 }}>
+            <Button onPress={addItem} icon="plus-box">{isEditMode ? "Save" : "Add"}</Button>
+          </View>
+          {isEditMode ? <View style={{backgroundColor: "#601410", borderColor: "#601410", borderRadius: 10, borderWidth: 2, marginTop: 10 }}><Button onPress={deleteItem} textColor="white" icon="delete">Delete</Button></View> : null}
           <Button 
             onPress={hideAddModal} 
             textColor="#ccc"

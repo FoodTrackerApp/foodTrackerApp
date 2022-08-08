@@ -286,10 +286,12 @@ export default function List({ settings }) {
         visible={true}
         variant="tertiary"
         animatedForm="left"
+        color="#f1b8b4"
         style={{
           bottom: 16,
           left: 16,
           position: 'absolute',
+          backgroundColor: "#601410",
         }}
       />
       

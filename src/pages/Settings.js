@@ -1,6 +1,6 @@
 import { IconButton, 
   Button, Divider, TextInput, 
-  Switch, HelperText, FAB } from 'react-native-paper';
+  Switch, HelperText, FAB, Surface, TouchableRipple } from 'react-native-paper';
 import { StatusBar } from 'expo-status-bar';
 import { StyleSheet, Text, View, ScrollView, Modal, ToastAndroid } from 'react-native';
 import React, { useState } from "react";
@@ -97,14 +97,18 @@ export default function Settings({ setSettings, settings }) {
             />
         </View>
         <View style={{margin: 10, flex: 1, height: 10, flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between", padding: 0}}>
-        <Text style={{color:"white", fontSize: 15
-        , width:150, margin: 10, marginLeft: 0}}>Offline mode</Text>
-          <Switch 
-            value={form.offlineMode}
-            onValueChange={value => setForm({...form, offlineMode: value})}
-            color="#76e790"
-            style={{ width: 70, marginBottom: 0}}
-          />
+        <TouchableRipple style={{width: "100%", height: 50}} onPress={() => setForm({...form, offlineMode: !form.offlineMode})}>
+          <View style={{width: "100%", flex: 1, flexDirection: "row", justifyContent: "space-between", alignItems: "center"}} >
+            <Text style={{color:"white", fontSize: 15, height: 15
+              , width:150, margin: 10, marginLeft: 5}}>Offline mode</Text>
+            <Switch 
+              value={form.offlineMode}
+              onValueChange={value => setForm({...form, offlineMode: value})}
+              color="#76e790"
+              style={{ width: 70, marginBottom: 0 }}
+            />
+          </View>
+        </TouchableRipple>
         </View>
         <HelperText type="info" visible={unsavedChanges}>Unsaved Changes</HelperText>
         <Button 
