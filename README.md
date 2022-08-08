@@ -12,7 +12,7 @@ For the (optional) Webapp and Server, go to [FoodTrackerNext]
 
 # Installation
 
-Preqreqsities:
+Prerequisites:
 - eas or expo (comes with eas)
 
 ## Android install
