@@ -12,10 +12,10 @@ For the (optional) Webapp and Server, go to [FoodTrackerNext]
 
 # Installation
 
-## Android install
-
 Preqreqsities:
 - eas or expo (comes with eas)
+
+## Android install
 
 ### 1. Clone the Repo
 Do that however you like, e.g. using GitHub CLI:
