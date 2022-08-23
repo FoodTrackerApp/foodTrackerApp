@@ -44,16 +44,13 @@ export default function Main() {
   const [index, setIndex] = React.useState(0);
   const [routes] = React.useState([
     { key: 'home', title: 'Home', focusedIcon: 'home', unfocusedIcon: "home" },
-    { key: "list", title: "List", focusedIcon: "format-list-bulleted", unfocusedIcon: "format-list-bulleted" },
-    { key: 'settings', title: 'Settings', focusedIcon: 'cog', unfocusedIcon: "cog" },
+    { key: "list", title: "List", focusedIcon: "format-list-bulleted", unfocusedIcon: "format-list-bulleted" }
   ]);
 
   const renderScene = ({ route }) => {
     switch (route.key) {
       case 'home':
         return <Home settings={settings} setSettings={setSettings} />;
-      case 'settings':
-        return <Settings setSettings={setSettings} />;
       case 'analytics':
         return <Analytics settings={settings} />;
       case "list": 

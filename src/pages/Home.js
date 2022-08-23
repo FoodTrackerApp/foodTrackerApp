@@ -10,11 +10,6 @@ import * as SQLite from "expo-sqlite";
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Crypto from "expo-crypto";
 
-function useForceUpdate() {
-  const [value, setValue] = useState(0);
-  return [() => setValue(value + 1), value];
-}
-
 // returns normalized timestrings -> 0h 0min 0sec
 function cleanTimeString(str) {
   var date = new Date(str);
@@ -35,10 +30,8 @@ export default function Home({ settings, setSettings }) {
   const [rows, setRows] = React.useState(data);
   const [nextDue, setNextDue] = React.useState({name: "", date: 0, count: 0, place: "", id: ""});
   const [form, setForm] = React.useState({name: "", date: datePickerDate, count: "", place: "", id: ""});
-  const [isOffline, setIsOffline] = React.useState(false);
   const [isEditMode, setIsEditMode] = React.useState(false);
   const [isSearching, setIsSearching] = React.useState(false);
-
 
   // modal stuff
   const [modalVisible, setModalVisible] = React.useState(false);
@@ -68,20 +61,8 @@ export default function Home({ settings, setSettings }) {
     // fetches data from local
     (async function() {
       await loadDataFromDevice();
-      await sync();
     })();
-
-
   }, [])
-
-  // force offline when offline mode is enabled
-  useEffect(() => {
-    if(!isOffline && settings.offlineMode) {
-      setIsOffline(true);
-    }
-  }, [isOffline, settings])
-
-  const [forceUpdate, forceUpdateId] = useForceUpdate();
 
   // scanner stuff
   const [hasPermission, setHasPermission] = React.useState(null);
@@ -92,7 +73,6 @@ export default function Home({ settings, setSettings }) {
 
   const showAddModal = () => {setAddModalVisible(true); setScanned(false);};
   const hideAddModal = () => {setAddModalVisible(false); resetForm(); setIsEditMode(false)};
-
 
   // date time picker
     const [datePickerDate, setDatePickerDate] = React.useState(new Date());
@@ -130,9 +110,7 @@ export default function Home({ settings, setSettings }) {
       setSearchTerm("");
       resolve();
     })
-
   }
-
 
   const addItem = async () => {
 
@@ -167,22 +145,7 @@ export default function Home({ settings, setSettings }) {
     )
 
     setNewData([...data, form]);
-    console.log("Trying network");
     
-    if(!isOffline) {
-      const sendBody = {
-        _id: id,
-        name: form.name,
-        place: form.place,
-        date: form.date,
-        count: parseInt(form.count),
-        datemodified: newDateModified,
-        toUpdate: false,
-        deleted: null,
-      }
-      const url = `http://${settings.serverIP}:${settings.serverPort}/api/send`
-      await fetch(url, {method: "POST", body: JSON.stringify(sendBody)})
-    }
     hideAddModal();
     resetForm();
   }
@@ -214,11 +177,6 @@ export default function Home({ settings, setSettings }) {
 
     // change id to _id
     sendBody._id = id;
-    
-    // Try deleting from server
-    if(!isOffline) {
-      await fetch(`http://${settings.serverIP}:${settings.serverPort}/api/delete`, {method: "DELETE", body: JSON.stringify(sendBody)})
-    }
     
     // update item in data
     let newData = data.map((ele) => {
@@ -257,89 +215,7 @@ export default function Home({ settings, setSettings }) {
       } return item; });
 
     setNewData(newData);
-
     hideAddModal();
-  }
-
-  // iterates through data and removes old duplicates
-  const sync = async () => {
-    if(settings.offlineMode) {
-      ToastAndroid.show("Disable offline mode to sync with server", ToastAndroid.SHORT)
-      return;
-    }
-    console.log("Syncing");
-
-    // testing network
-    try {
-      // ping server to see if network is available
-      const url = `${settings.serverIP}:${settings.serverPort}`;
-      const res = await fetch(`http://${url}/api/ping`);
-      if(res.status == 200) {
-        ToastAndroid.show(`Network is available`, ToastAndroid.SHORT);
-        setIsOffline(false);
-      } else {
-        throw new Error("Network is not available");
-      }
-
-    } catch(e) {
-      setIsOffline(true);
-      // show toast
-      ToastAndroid.show("Could not reach network. Offline mode enabled", ToastAndroid.LONG);
-      return;
-    }
-
-    try {
-
-      // get all itemsdb from server
-      const res = await fetch(`http://${settings.serverIP}:${settings.serverPort}/api/get`, {method: "GET"});
-      const json = await res.json();
-
-      // get all itemsdb from local
-      const local = data;
-
-      // get all itemsdb from server and change _id to id
-      const server = json.map(item => {
-        return {...item, id: item._id};
-      });
-
-      // add all itemsdb from server to local database
-      db.transaction((tx) => {
-        server.forEach(item => {
-          // update local database if item already exists in local
-          const isLocal = local.find(localItem => localItem.id === item.id);
-          if(isLocal && (parseInt(item.datemodified) > parseInt(isLocal.datemodified))) {
-            console.log("Updating local database:", item.name);
-            tx.executeSql("update items set name = ?, place = ?, date = ?, count = ?, datemodified = ? where id = ?", 
-              [item.name, item.place, item.date, item.count, item.datemodified, item.id]);
-                // Update data and rows with the edited item
-            const newData = data.map(ditem => {
-              if(ditem.id === item.id) {
-                return {...item};
-              } return ditem; });
-            setNewData(newData);
-          } else if(!isLocal) {
-            tx.executeSql("insert into items (id, name, place, date, count, datemodified) values (?, ?, ?, ?, ?, ?)", 
-              [item.id, item.name, item.place, item.date, item.count, item.datemodified]);
-          
-            // Add new item to data and rows
-            const newData = [...data, item];
-            setNewData(newData);
-          }
-        })
-      },null,forceUpdate)
-
-      // get new itemsdb from database
-      //loadDataFromDevice();
-
-      // sync server side
-      await fetch(`http://${settings.serverIP}:${settings.serverPort}/api/replace`, {
-        method: "POST",
-        body: JSON.stringify(data)
-      });
-      
-      console.log("Synced");
-
-    } catch(e) { ToastAndroid.show("Error syncing with server: " + e, ToastAndroid.LONG) }
   }
 
   const handleBarCodeScanned = ({ type, data }) => {
@@ -465,8 +341,6 @@ export default function Home({ settings, setSettings }) {
     setIsEditMode(true);
   }
 
-  const tableColumns = ["name", "count", "date", "place"];
-
   // handles rendering a row in the table
   const renderItem = (item) => {
     return (
@@ -550,10 +424,7 @@ export default function Home({ settings, setSettings }) {
       <>
       <View style={{flex: 1, flexDirection: "row", alignContent: "center", justifyContent: "space-between"}}>
         <Text style={styles.header}>FoodTracker </Text>
-        <IconButton icon="refresh" iconColor="white" size={20} onPress={() => sync()} />
       </View>
-
-      {isOffline ? <Text style={{color: "#76e790"}}>Offline mode</Text> : null}
 
       <RenderNextDue />
 
