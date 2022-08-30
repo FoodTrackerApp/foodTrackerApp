@@ -413,7 +413,7 @@ export default function Home({ settings, setSettings }) {
     <Modal animationType='slide' onShow={getPermissions} visible={modalVisible} onRequestClose={hideModal} >
       <View style={{flex: 1,flexDirection: 'column', backgroundColor: "black"}}>
         {hasPermission === false ? <Text>No Camera permissions</Text> : null}
-        {hasPermission === null ? <Text>Requesting for Camera permissions</Text> : null}
+        {hasPermission === null ? <Text>Requesting Camera permissions</Text> : null}
         <BarCodeScanner onBarCodeScanned={scanned ? undefined : handleBarCodeScanned} style={StyleSheet.absoluteFill} />
         {scanned &&  <Button title={'Tap to Scan Again'} onPress={() => setScanned(false)} />}
       </View>
