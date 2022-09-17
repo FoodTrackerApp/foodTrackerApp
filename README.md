@@ -14,6 +14,15 @@ For the (optional) Webapp and Server, go to [FoodTrackerNext]
 
 # Installation
 
+There are two ways to install FoodTrackerApp to your device:
+
+1. (Install from Google Play store)[https://play.google.com/store/apps/details?id=com.cr4yfish.foodTrackerApp]
+2. Build and install manually
+
+There are up- and downsides for each of these methods.
+For instance if you have an iPhone, you will have to build and sideload it yourself.
+Or if you want the newest version, I also recommend building it yourself since it takes ages for Google to approve updates.
+
 Prerequisites:
 - eas or expo (comes with eas)
 
