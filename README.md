@@ -16,7 +16,7 @@ For the (optional) Webapp and Server, go to [FoodTrackerNext]
 
 There are two ways to install FoodTrackerApp to your device:
 
-1. (Install from Google Play store)[https://play.google.com/store/apps/details?id=com.cr4yfish.foodTrackerApp]
+1. Install from [Google Play Store]
 2. Build and install manually
 
 There are up- and downsides for each of these methods.
@@ -74,3 +74,4 @@ After the build you need to find a way to install it onto your Apple Device.
 I recommend using a 3rd party App launcher.
 
 [FoodTrackerNext]: <https://github.com/cr4yfish/food-tracker-next>
+[Google Play Store] : <https://play.google.com/store/apps/details?id=com.cr4yfish.foodTrackerApp>
