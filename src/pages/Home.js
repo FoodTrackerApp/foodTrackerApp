@@ -277,9 +277,10 @@ export default function Home({ settings, setSettings }) {
     if(Math.abs(diffDays) > 30) {
       diffDays = Math.abs(Math.ceil(diffDays /30));
       if(diffDays > 12) {
-        diffDays = Math.ceil(diffDays / 12) + " years";
+        diffDays = Math.ceil(diffDays/12);
+        diffDays = diffDays + (diffDays == 1 ? " year" : "years");
       } else {
-        diffDays = diffDays + " months";
+        diffDays = diffDays + (diffDays == 1 ? " month" : " months");
       }
     } else {
       if(diffDays == 0) {

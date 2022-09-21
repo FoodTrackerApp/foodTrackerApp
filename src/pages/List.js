@@ -178,6 +178,19 @@ export default function List({ settings }) {
         }));
       }
 
+      // removes all isDone items from list and reloads view
+      const deleteDone = () => {
+        let workList = list;
+
+        workList = workList.filter(item => item.isDone);
+        workList.forEach(item => {
+          deleteItem(item);
+        })
+
+        // refresh view
+        loadDataFromDb();
+      }
+
       const tableRenderOverwrite = (item) =>  {
         return (  
         <DataTable.Row onPress={() => onRowClick(item)} key={item.id}>
@@ -282,8 +295,8 @@ export default function List({ settings }) {
         icon="delete"
         label="Delete done"
         extended={true}
-        onPress={() => {list.filter(item => item.isDone).forEach(ele => deleteItem(ele))}}
-        visible={true}
+        onPress={() => deleteDone()}
+        visible={list.length > 0}
         variant="tertiary"
         animatedForm="left"
         color="#f1b8b4"
