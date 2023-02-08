@@ -5,7 +5,8 @@ import { StatusBar } from 'expo-status-bar';
 import { StyleSheet, Text, View, ScrollView, Modal, ToastAndroid } from 'react-native';
 import React, { useState } from "react";
 import { useEffect } from 'react';
-
+import * as SQLite from "expo-sqlite";
+import { readItems, createTable } from '../functions/Database';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export default function Settings({ setSettings, settings }) {
@@ -14,7 +15,9 @@ export default function Settings({ setSettings, settings }) {
     const [unsavedChanges, setUnsavedChanges] = React.useState(false);
     const [isLoadingSettings, setIsLoadingSettings] = React.useState(false);
     const [isSavingSettings, setIsSavingSettings] = React.useState(false);
-    
+
+    const db = SQLite.openDatabase("item.db");
+
     const saveSettings = async () => {
       setIsSavingSettings(true);
         try {
@@ -46,6 +49,43 @@ export default function Settings({ setSettings, settings }) {
             ToastAndroid.show("Error reading settings", ToastAndroid.LONG);
         }
       setIsLoadingSettings(false);
+    }
+
+    const wipeDatabase = async () => {
+        try {
+          const items = await readItems();
+          console.log("Items from db:",items);
+          // Local database
+          db.transaction((tx) => {
+            tx.executeSql(
+              "drop table items",
+            );
+          },
+          (error) => {console.log(error)},
+          );
+          createTable();
+          if(!originalSettings.offlineMode) {
+              // mark all items as deleted
+              items.forEach(item => {
+                  item.deleted = true;
+              });
+              // Sync with server
+              await fetch(`http://${originalSettings.serverIP}:${originalSettings.serverPort}/api/replace`, {
+                method: "POST",
+                body: JSON.stringify(items)
+              }).then(response => {
+                if(response.status == 200) {
+                    ToastAndroid.show("Database wiped (online synced)", ToastAndroid.SHORT);
+                } else {
+                  throw new Error("Could not reach Network, error wiping database");
+                }
+              })
+          }
+          ToastAndroid.show("Database wiped (offline only)", ToastAndroid.SHORT);
+        } catch(e) {
+            console.log(e);
+            ToastAndroid.show("Error wiping database", ToastAndroid.LONG);
+        }
     }
 
     // Read settings on mount
@@ -96,19 +136,31 @@ export default function Settings({ setSettings, settings }) {
               activeUnderlineColor={form.serverPort.length == 0 ? "#ecae43" : "#fff"}
             />
         </View>
-        <View style={{margin: 10, flex: 1, height: 10, flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between", padding: 0}}>
-        <TouchableRipple style={{width: "100%", height: 50}} onPress={() => setForm({...form, offlineMode: !form.offlineMode})}>
+        <View style={{ margin: 10, display: "flex", flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between", padding: 0 }}>
+          <TouchableRipple style={{width: "100%", height: 50}} onPress={() => setForm({...form, offlineMode: !form.offlineMode})}>
+            <View style={{width: "100%", flex: 1, flexDirection: "row", justifyContent: "space-between", alignItems: "center"}} >
+              <Text style={{color:"white", fontSize: 15, height: 20, overflow: "visible"
+                , width:150, margin: 10, marginLeft: 5}}>Offline mode</Text>
+              <Switch 
+                value={form.offlineMode}
+                onValueChange={value => setForm({...form, offlineMode: value})}
+                color="#76e790"
+                style={{ width: 70, marginBottom: 0 }}
+              />
+            </View>
+          </TouchableRipple>
+        </View>
+        <View style={{ margin: 10, flex: 1, height: 10, flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between", padding: 0 }}>
           <View style={{width: "100%", flex: 1, flexDirection: "row", justifyContent: "space-between", alignItems: "center"}} >
-            <Text style={{color:"white", fontSize: 15, height: 15
-              , width:150, margin: 10, marginLeft: 5}}>Offline mode</Text>
-            <Switch 
-              value={form.offlineMode}
-              onValueChange={value => setForm({...form, offlineMode: value})}
-              color="#76e790"
-              style={{ width: 70, marginBottom: 0 }}
-            />
+            <Button
+              mode='contained'
+              icon="database-remove"
+              textColor="#f1b8b4"
+              backgroundColor="#601410"
+              buttonColor='#601410'
+              onPress={() => wipeDatabase()}
+            >Wipe database</Button>
           </View>
-        </TouchableRipple>
         </View>
         <HelperText type="info" visible={unsavedChanges}>Unsaved Changes</HelperText>
         <Button 
