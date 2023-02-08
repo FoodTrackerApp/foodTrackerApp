@@ -151,7 +151,11 @@ export default function Home({ settings, setSettings }) {
     form.deleted = null;
 
     // clean date string
-    setForm({...form, date: cleanTimeString(form.date)});
+    let cleanDate = cleanTimeString(form.date);
+    if(cleanDate === null || cleanDate == 0) {
+      cleanDate = new Date().getTime();
+    }
+    setForm({...form, date: cleanDate});
     
     // Make ID
     const id = await Crypto.digestStringAsync(
@@ -170,18 +174,28 @@ export default function Home({ settings, setSettings }) {
     console.log("Trying network");
     
     if(!isOffline) {
-      const sendBody = {
-        _id: id,
-        name: form.name,
-        place: form.place,
-        date: form.date,
-        count: parseInt(form.count),
-        datemodified: newDateModified,
-        toUpdate: false,
-        deleted: null,
+      try {
+        const sendBody = {
+          _id: id,
+          name: form.name,
+          place: form.place,
+          date: form.date,
+          count: parseInt(form.count),
+          datemodified: newDateModified,
+          toUpdate: false,
+          deleted: null,
+        }
+        const url = `http://${settings.serverIP}:${settings.serverPort}/api/send`
+        const response = await fetch(url, {method: "POST", body: JSON.stringify(sendBody)})
+        if(response.status != 200) {
+          // Error
+          console.log("Error sending data to server");
+          throw new Error(response);
+        }
+      } catch(e) {
+        console.log(e);
       }
-      const url = `http://${settings.serverIP}:${settings.serverPort}/api/send`
-      await fetch(url, {method: "POST", body: JSON.stringify(sendBody)})
+
     }
     hideAddModal();
     resetForm();
@@ -272,6 +286,7 @@ export default function Home({ settings, setSettings }) {
     // testing network
     try {
       // ping server to see if network is available
+      console.log("Testing network:", `http://${settings.serverIP}:${settings.serverPort}/api/ping`);
       const url = `${settings.serverIP}:${settings.serverPort}`;
       const res = await fetch(`http://${url}/api/ping`);
       if(res.status == 200) {
@@ -283,6 +298,7 @@ export default function Home({ settings, setSettings }) {
 
     } catch(e) {
       setIsOffline(true);
+      console.log("Network error:",e);
       // show toast
       ToastAndroid.show("Could not reach network. Offline mode enabled", ToastAndroid.LONG);
       return;
