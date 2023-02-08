@@ -1,14 +1,24 @@
 import { StatusBar } from 'expo-status-bar';
-import { StyleSheet, Text, View, ScrollView, Modal, ToastAndroid } from 'react-native';
-import { DataTable, Searchbar, IconButton, Button, TextInput } from 'react-native-paper';
+import { StyleSheet, Text, View, ScrollView, Modal, ToastAndroid, Platform } from 'react-native';
+import { DataTable, Searchbar, IconButton, Button, TextInput, Checkbox, TouchableRipple } from 'react-native-paper';
 import React, { useState } from "react";
 import { useEffect } from 'react';
 import { BarCodeScanner } from 'expo-barcode-scanner';
 import convertUPC from '../functions/ConvertUPC';
-import { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
+// import { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
 import * as SQLite from "expo-sqlite";
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Crypto from "expo-crypto";
+
+import {  dropItems, readItems } from '../functions/Database';
+
+import WebDateTimePicker from '../components/WebDateTimePicker';
+console.log(Platform.OS);
+
+if(Platform.OS == "android") {
+  // Load DateTimePickerAndroid from react-native-community
+  var { DateTimePickerAndroid } = require('@react-native-community/datetimepicker');
+}
 
 function useForceUpdate() {
   const [value, setValue] = useState(0);
@@ -33,8 +43,8 @@ export default function Home({ settings, setSettings }) {
   const [searchTerm, setSearchTerm] = React.useState("");
   const [data, setData] = React.useState([]);
   const [rows, setRows] = React.useState(data);
-  const [nextDue, setNextDue] = React.useState({name: "", date: 0, count: 0, place: "", id: ""});
-  const [form, setForm] = React.useState({name: "", date: datePickerDate, count: "", place: "", id: ""});
+  const [nextDue, setNextDue] = React.useState({name: "", date: 0, hasDueDate: false, count: 0, place: "", id: ""});
+  const [form, setForm] = React.useState({name: "", date: datePickerDate, hasDueDate: false, count: "", place: "", id: ""});
   const [isOffline, setIsOffline] = React.useState(false);
   const [isEditMode, setIsEditMode] = React.useState(false);
   const [isSearching, setIsSearching] = React.useState(false);
@@ -60,7 +70,7 @@ export default function Home({ settings, setSettings }) {
     // make itemsdb database if not existent
     db.transaction((tx) => {
       tx.executeSql(
-        "create table if not exists items (id text primary key not null, name text, place text, date int, count int, datemodified int, deleted int);"
+        "create table if not exists items (id text primary key not null, name text, place text, date int, hasDueDate int, count int, datemodified int, deleted int);"
       );
     },
     (error) => {console.log(error)},
@@ -117,7 +127,8 @@ export default function Home({ settings, setSettings }) {
     };
 
     const resetForm = () => {
-      setForm({name: "", date: null, count: "", place: ""});
+      setDatePickerDate(new Date());
+      setForm({name: "", date: datePickerDate, hasDueDate: false, count: "", place: ""});
     };
 
   const setNewData = (newData) => {
@@ -155,8 +166,12 @@ export default function Home({ settings, setSettings }) {
     if(cleanDate === null || cleanDate == 0) {
       cleanDate = new Date().getTime();
     }
+
+    if(!form.hasDueDate) {
+    }
+
     setForm({...form, date: cleanDate});
-    
+
     // Make ID
     const id = await Crypto.digestStringAsync(
       Crypto.CryptoDigestAlgorithm.SHA256, form.name + form.date + form.count + form.place);
@@ -164,8 +179,8 @@ export default function Home({ settings, setSettings }) {
     form.id = id;
 
     db.transaction((tx) => {
-      tx.executeSql("insert into items (id, name, place, date, count, datemodified, deleted) values (?, ?, ?, ?, ?, ?, 0)", 
-        [id, form.name, form.place, form.date, form.count, form.datemodified]);
+      tx.executeSql("insert into items (id, name, place, date, hasDueDate, count, datemodified, deleted) values (?, ?, ?, ?, ?, ?, ?, 0)", 
+        [id, form.name, form.place, form.date, form.hasDueDate, form.count, form.datemodified]);
     },
     (err) => {console.log(err)},
     )
@@ -180,18 +195,22 @@ export default function Home({ settings, setSettings }) {
           name: form.name,
           place: form.place,
           date: form.date,
+          hasDueDate: form.hasDueDate,
           count: parseInt(form.count),
           datemodified: newDateModified,
           toUpdate: false,
           deleted: null,
         }
         const url = `http://${settings.serverIP}:${settings.serverPort}/api/send`
-        const response = await fetch(url, {method: "POST", body: JSON.stringify(sendBody)})
-        if(response.status != 200) {
-          // Error
-          console.log("Error sending data to server");
-          throw new Error(response);
-        }
+        await fetch(url, {method: "POST", body: JSON.stringify(sendBody)}).then(async response => {
+          if(response.status == 200) {
+            console.log("Success sending data to server");
+          } else {
+            const json = await response.json();
+            console.log(json);
+            throw new Error(response);
+          }
+        })
       } catch(e) {
         console.log(e);
       }
@@ -219,7 +238,6 @@ export default function Home({ settings, setSettings }) {
     db.transaction((tx) => {
       tx.executeSql("update items set deleted = 1, datemodified = ? where id = ?",
         [newDateModified, id]);
-        
     },
     (err) => {console.log(err)},
     )
@@ -258,8 +276,8 @@ export default function Home({ settings, setSettings }) {
   
     // Update
     db.transaction((tx) => {
-      tx.executeSql("update items set name = ?, place = ?, date= ?, count = ?, datemodified = ? where id = ?", 
-        [form.name, form.place, form.date, form.count, newDateModified, id]);
+      tx.executeSql("update items set name = ?, place = ?, date= ?, hasDueDate = ?, count = ?, datemodified = ? where id = ?", 
+        [form.name, form.place, form.date, form.hasDueDate, form.count, newDateModified, id]);
     },
     (err) => {console.log(err)},
     )
@@ -310,6 +328,18 @@ export default function Home({ settings, setSettings }) {
       const res = await fetch(`http://${settings.serverIP}:${settings.serverPort}/api/get`, {method: "GET"});
       const json = await res.json();
 
+      console.log("items in server:", json);
+      if(json.length == 0) {
+        // no items in server, remove everything from local database
+        console.log("No items in server, removing everything from local database");
+        await dropItems();
+        console.log("removed everything from local database")
+        const items = await readItems();
+        console.log("items in local database:", items);
+        setData(items);
+        return;
+      }
+
       // get all itemsdb from local
       const local = data;
 
@@ -325,8 +355,8 @@ export default function Home({ settings, setSettings }) {
           const isLocal = local.find(localItem => localItem.id === item.id);
           if(isLocal && (parseInt(item.datemodified) > parseInt(isLocal.datemodified))) {
             console.log("Updating local database:", item.name);
-            tx.executeSql("update items set name = ?, place = ?, date = ?, count = ?, datemodified = ? where id = ?", 
-              [item.name, item.place, item.date, item.count, item.datemodified, item.id]);
+            tx.executeSql("update items set name = ?, place = ?, date = ?, hasDueDate = ? count = ?, datemodified = ?, deleted = ? where id = ?", 
+              [item.name, item.place, item.date, item.hasDueDate, item.count, item.datemodified, item.deleted, item.id]);
                 // Update data and rows with the edited item
             const newData = data.map(ditem => {
               if(ditem.id === item.id) {
@@ -334,8 +364,8 @@ export default function Home({ settings, setSettings }) {
               } return ditem; });
             setNewData(newData);
           } else if(!isLocal) {
-            tx.executeSql("insert into items (id, name, place, date, count, datemodified) values (?, ?, ?, ?, ?, ?)", 
-              [item.id, item.name, item.place, item.date, item.count, item.datemodified]);
+            tx.executeSql("insert into items (id, name, place, date, hasDueDate, count, datemodified, deleted) values (?, ?, ?, ?, ?, ?, ?, ?)", 
+              [item.id, item.name, item.place, item.date, item.hasDueDate, item.count, item.datemodified, item.deleted]);
           
             // Add new item to data and rows
             const newData = [...data, item];
@@ -343,6 +373,9 @@ export default function Home({ settings, setSettings }) {
           }
         })
       },null,forceUpdate)
+
+      const newItems = await readItems();
+      console.log("New items in db:",newItems);
 
       // get new itemsdb from database
       //loadDataFromDevice();
@@ -432,6 +465,7 @@ export default function Home({ settings, setSettings }) {
     }
 
     return (
+      data.length > 0 ?
       <View style={{
         backgroundColor: '#161616',
         borderRadius: 10,
@@ -444,6 +478,7 @@ export default function Home({ settings, setSettings }) {
           !isOverdue ? <Text style={{color: "#76e790", fontWeight: "bold"}}>{`In ${diffDays}`}</Text> 
           : <Text style={{color: "#ecae43", fontWeight: "bold"}}>{`Since ${diffDays}`}</Text>}</Text>
       </View>
+      : null
     )
 
   }
@@ -508,14 +543,26 @@ export default function Home({ settings, setSettings }) {
               onChangeText={text => setForm({...form, name: text})}
              />
           </View>
-          <View style={styles.formField}>
-            <TextInput 
+          <View style={{...styles.formField, }}>
+            <TouchableRipple onPress={() => setForm({...form, hasDueDate: !form.hasDueDate})}>
+              <View style={{ display: "flex", flexDirection: "row", justifyContent: "space-between", alignItems: "center" }} >
+                <Text style={{ color: "white" }}>Has due date</Text>
+                <Checkbox 
+                  status={form.hasDueDate ? 'checked' : 'unchecked'}
+                />
+              </View>
+            </TouchableRipple>
+          </View>
+          {form.hasDueDate ? <View style={styles.formField}>
+            {Platform.OS == "web" ? 
+              <WebDateTimePicker date={datePickerDate} setDate={setDatePickerDate} />
+             : <TextInput 
             mode="outlined"
             onPressIn={showDatepicker} 
             label="Due Date" 
             value={datePickerDate.toLocaleDateString()}
-             />
-          </View>
+             />}
+          </View> : null}
           <View style={styles.formField}>
             <TextInput 
               label="Count" 
